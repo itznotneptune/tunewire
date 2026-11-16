@@ -131,11 +131,12 @@ public final class TunewireHud {
             int w = Math.round(r.width());
             if (w <= 0) continue;
             int x = (LYRICS_W - w) / 2;
-            if (c.lyricsBackground && r.current() && r.emphasis() > 0.05f) {
-                g.fill(x - 4, y - 1, x + w + 4, y + 10, LyricsFlow.withAlpha(0x000000, 0.56f * r.emphasis() * r.alpha()));
-            }
+            // backdrop and colour follow the eased emphasis, so the old line fades out as the new one fades in
+            // (switching them on the "current" flag made the box pop off the outgoing line)
+            float shade = 0.56f * r.emphasis() * r.alpha();
+            if (c.lyricsBackground && shade > 0.03f) g.fill(x - 4, y - 1, x + w + 4, y + 10, LyricsFlow.withAlpha(0x000000, shade));
             int rgb = LyricsFlow.mix(0xB8B8C0, 0xFFFFFF, r.emphasis());
-            g.drawString(font, r.text(), x, y, LyricsFlow.withAlpha(rgb, r.alpha()), r.emphasis() > 0.5f);
+            g.drawString(font, r.text(), x, y, LyricsFlow.withAlpha(rgb, r.alpha()), true); // shadow always: toggling it mid-glide popped
         }
         g.pose().popMatrix();
     }

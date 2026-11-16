@@ -74,6 +74,23 @@ class SpotifyParseTest {
     }
 
     @Test
+    void pollsNeverStepTheClockBackSlightly() {
+        PlaybackState old = PlaybackState.parse(JsonParser.parseString(PLAYER).getAsJsonObject(), 1000); // 61.0 s at t=1000
+        // poll at t=3000 says 62.7 s: we extrapolated 63.0 s, so it's 300 ms "behind" -> keep ours
+        PlaybackState late = old.withProgress(62_700, 3000);
+        assertEquals(63_000, PlaybackState.keepTimeline(old, late).positionAt(3000));
+        // forward correction is taken
+        PlaybackState ahead = old.withProgress(63_400, 3000);
+        assertEquals(63_400, PlaybackState.keepTimeline(old, ahead).positionAt(3000));
+        // a real seek back (10 s) is taken
+        PlaybackState seek = old.withProgress(53_000, 3000);
+        assertEquals(53_000, PlaybackState.keepTimeline(old, seek).positionAt(3000));
+        // paused: take Spotify's value as is
+        PlaybackState paused = late.withPlaying(false, 3000);
+        assertEquals(62_700, PlaybackState.keepTimeline(old, paused).positionAt(9999));
+    }
+
+    @Test
     void parsesQueue() {
         List<Track> q = Track.parseQueue(JsonParser.parseString("""
                 {"currently_playing":{"type":"track","uri":"spotify:track:now","name":"Now"},

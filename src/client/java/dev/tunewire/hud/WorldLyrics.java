@@ -89,7 +89,8 @@ public final class WorldLyrics {
             if (r.width() <= 0) continue;
             int rgb = LyricsFlow.mix(0xB8B8C0, 0xFFFFFF, r.emphasis());
             int color = LyricsFlow.withAlpha(rgb, r.alpha() * (0.7f + 0.3f * r.emphasis()));
-            int bg = c.lyricsBackground && r.current() ? LyricsFlow.withAlpha(0, 0.4f * r.emphasis() * r.alpha()) : 0;
+            float shade = 0.4f * r.emphasis() * r.alpha(); // eased, so the backdrop cross-fades between lines
+            int bg = c.lyricsBackground && shade > 0.03f ? LyricsFlow.withAlpha(0, shade) : 0;
             font.drawInBatch(r.text(), -r.width() / 2f, r.y(), color, false, m, buffers, mode, bg, LightTexture.FULL_BRIGHT);
         }
         pose.popPose();

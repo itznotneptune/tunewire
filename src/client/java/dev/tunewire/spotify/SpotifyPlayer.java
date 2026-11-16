@@ -210,7 +210,7 @@ public final class SpotifyPlayer {
     }
 
     private void apply(PlaybackState s) {
-        state = s;
+        state = PlaybackState.keepTimeline(state, s);
         String uri = s == null || s.track() == null ? "" : s.track().uri();
         if (!uri.equals(lastTrackUri)) {
             lastTrackUri = uri;

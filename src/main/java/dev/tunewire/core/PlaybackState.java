@@ -46,6 +46,24 @@ public record PlaybackState(Track track, boolean playing, long progressMs, Strin
         return new PlaybackState(track, playing, progressMs, deviceId, deviceName, volume, supportsVolume, shuffle, r, fetchedAt);
     }
 
+    /** Backward corrections at most this large are treated as latency, not a seek. */
+    public static final long MAX_LATENCY_CORRECTION_MS = 1500;
+
+    /**
+     * A poll's progress arrives slightly behind (network latency, Spotify's own update rate). Taking it as is
+     * makes the clock step backwards every poll, which flips the lyric line back and forth at line boundaries.
+     * Small backward corrections are ignored; real seeks and forward corrections are taken.
+     */
+    public static PlaybackState keepTimeline(PlaybackState old, PlaybackState fresh) {
+        if (old == null || fresh == null || old.track() == null || fresh.track() == null) return fresh;
+        if (!old.track().uri().equals(fresh.track().uri()) || !old.playing() || !fresh.playing()) return fresh;
+        long now = fresh.fetchedAt();
+        long ours = old.positionAt(now), theirs = fresh.positionAt(now);
+        long behind = ours - theirs;
+        if (behind > 0 && behind <= MAX_LATENCY_CORRECTION_MS) return fresh.withProgress(ours, now);
+        return fresh;
+    }
+
     /** off → context → track → off, as the Spotify app cycles it. */
     public static String nextRepeat(String r) {
         return switch (r) {
