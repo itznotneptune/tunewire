@@ -35,6 +35,21 @@ public final class TwConfig {
     public float worldScale = 1.0f;
     /** Floating lyrics stay visible through blocks in front of them. */
     public boolean worldThroughWalls = true;
+    /** Floating lyrics offset from the centre of view, in blocks: positive = right / up. */
+    public float worldOffsetX = 0f;
+    public float worldOffsetY = 0f;
+    /**
+     * How the lyrics are shown: "hud" (box above the hotbar), "world" (3D text that follows your view) or
+     * "placed" (each line is set down in the world where you are looking when it starts, and stays there).
+     */
+    public String lyricsMode = "";
+
+    /** Explicit content: mask swear words in lyrics. */
+    public boolean censorLyrics = false;
+    /** Explicit content: leave explicit tracks out of search, library and queue lists. */
+    public boolean hideExplicit = false;
+    /** Explicit content: skip to the next track when an explicit one starts. */
+    public boolean skipExplicit = false;
     /** Added to the playback position when picking the lyric line; positive shows lines earlier. */
     public int lyricsOffsetMs = 0;
     public int volumeStep = 10;
@@ -89,8 +104,37 @@ public final class TwConfig {
         volumeStep = Math.max(1, Math.min(25, volumeStep));
         worldDistance = Math.max(1.5f, Math.min(8f, worldDistance));
         worldScale = Math.max(0.5f, Math.min(2.5f, worldScale));
+        worldOffsetX = Math.max(-4f, Math.min(4f, worldOffsetX));
+        worldOffsetY = Math.max(-4f, Math.min(4f, worldOffsetY));
+        if (lyricsMode == null || !(lyricsMode.equals("hud") || lyricsMode.equals("placed") || lyricsMode.equals("world"))) {
+            lyricsMode = lyricsInWorld ? "world" : "hud"; // settings files from 0.2/0.3 only had the world toggle
+        }
+        lyricsInWorld = lyricsMode.equals("world");
         playerW = Math.max(0, playerW);
         playerH = Math.max(0, playerH);
+    }
+
+    /** hud → placed → world → hud; keeps the legacy world flag in step. */
+    public void cycleLyricsMode() {
+        lyricsMode = switch (lyricsMode) {
+            case "hud" -> "placed";
+            case "placed" -> "world";
+            default -> "hud";
+        };
+        lyricsInWorld = lyricsMode.equals("world");
+    }
+
+    /** Lyrics are drawn in the 3D world (following or placed), not on the HUD. */
+    public boolean lyricsIn3d() {
+        return !"hud".equals(lyricsMode);
+    }
+
+    public static String lyricsModeLabel(String mode) {
+        return switch (mode) {
+            case "placed" -> "Placed in world";
+            case "world" -> "Floating, follows view";
+            default -> "HUD box";
+        };
     }
 
     public static final class HudPos {

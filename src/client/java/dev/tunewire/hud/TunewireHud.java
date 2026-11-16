@@ -55,7 +55,7 @@ public final class TunewireHud {
         if (s == null || s.track() == null) return;
         if (c.hideHudWhenPaused && !s.playing()) return;
         if (c.nowPlayingHud) drawNowPlaying(g, mc.font, c.nowPlayingPos, s, SpotifyPlayer.INSTANCE.position());
-        if (c.lyricsHud && !c.lyricsInWorld && s.playing()) {
+        if (c.lyricsHud && !c.lyricsIn3d() && s.playing()) {
             drawLyrics(g, mc.font, g.guiWidth(), g.guiHeight(), false);
         }
     }
@@ -80,7 +80,8 @@ public final class TunewireHud {
         }
         int textW = NP_W - tx - 6;
         int titleW = textW - (s.playing() ? 0 : 10);
-        g.drawString(font, Draw.marquee(font, t.title(), titleW, now), tx, 6, Draw.TEXT, true);
+        int bw = t.explicit() ? Draw.explicitBadge(g, font, tx, 5) : 0;
+        g.drawString(font, Draw.marquee(font, t.title(), titleW - bw, now), tx + bw, 6, Draw.TEXT, true);
         if (!s.playing()) Draw.pause(g, NP_W - 10, 9, 6, Draw.MUTED);
 
         long dur = t.durationMs();

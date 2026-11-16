@@ -5,7 +5,13 @@ A client-side Fabric mod for Minecraft 1.21.11 that puts your Spotify inside the
 - **Now-playing HUD**: cover art, title and artist (they scroll if too long), and a progress bar. In the last 20 seconds of a song it shows **Next up:** with the following track.
 - **Synced lyrics**: shown on the HUD and in the player, timed to the song. They come from [LRCLIB](https://lrclib.net), because Spotify has no public lyrics API.
   - Lines glide smoothly from one to the next, and long lines wrap instead of being cut off.
-  - Optionally, the lyrics **float as 3D text in the world** in front of you. You can set the distance, text size and whether they show through blocks.
+  - Three styles (Settings → Lyrics → Style):
+    - **HUD box**: above the hotbar.
+    - **Placed in world**: each line is set down where you're looking when it starts and stays there as you move.
+    - **Floating**: 3D text that follows your view.
+
+    For the two 3D styles you can set the distance, left/right and up/down offset, text size, and whether they show through blocks. While you adjust them, the world stays visible behind the settings.
+  - **Explicit content** options: censor swear words in lyrics, hide explicit songs from lists, and skip explicit songs automatically. Explicit tracks always show an **E** badge.
   - Click a line to jump to it.
   - If the timing is off, switch to another lyric version or nudge the offset.
 - **Player screen**:

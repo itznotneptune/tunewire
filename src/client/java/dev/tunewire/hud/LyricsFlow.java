@@ -56,10 +56,14 @@ public final class LyricsFlow {
         String k;
         float target;
         if (synced) {
-            k = ly.trackUri() + "#" + ly.chosen();
+            boolean censor = c.censorLyrics;
+            k = ly.trackUri() + "#" + ly.chosen() + "#" + censor;
             if (!k.equals(key)) {
                 texts = new ArrayList<>();
-                for (Lrc.Line l : ly.lrc().lines()) texts.add(l.text().isEmpty() ? "♪" : l.text());
+                for (Lrc.Line l : ly.lrc().lines()) {
+                    String t = l.text().isEmpty() ? "♪" : l.text();
+                    texts.add(censor ? dev.tunewire.core.Censor.clean(t) : t);
+                }
                 build(font, k, texts);
             }
             target = ly.lrc().indexAt(SpotifyPlayer.INSTANCE.position() + c.lyricsOffsetMs);

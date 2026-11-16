@@ -216,6 +216,11 @@ public final class SpotifyPlayer {
         if (!uri.equals(lastTrackUri)) {
             lastTrackUri = uri;
             Track t = s == null ? null : s.track();
+            // once per track change, so a skip that lands on another explicit song skips that too, but never loops on one
+            if (t != null && t.explicit() && s.playing() && dev.tunewire.config.TwConfig.get().skipExplicit) {
+                setStatus("Skipped explicit song: " + t.title());
+                next();
+            }
             LyricsService.INSTANCE.request(t);
             CoverArt.INSTANCE.request(t == null ? "" : t.imageUrl());
         }

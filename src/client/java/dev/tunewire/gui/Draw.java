@@ -81,6 +81,13 @@ public final class Draw {
         g.drawCenteredString(font, "♪", x + size / 2, y + size / 2 - 4, FAINT);
     }
 
+    /** The small "E" box Spotify shows on explicit tracks. Returns the width it takes, including a gap. */
+    public static int explicitBadge(GuiGraphics g, Font font, int x, int y) {
+        round(g, x, y, x + 9, y + 9, 0xFF9A9AA6);
+        g.drawString(font, "E", x + 2, y + 1, 0xFF121318, false);
+        return 12;
+    }
+
     /** Text cut to {@code width} with an ellipsis. */
     public static String ellipsize(Font font, String s, int width) {
         if (font.width(s) <= width) return s;

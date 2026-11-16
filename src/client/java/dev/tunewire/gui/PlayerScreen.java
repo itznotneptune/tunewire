@@ -8,6 +8,7 @@ import dev.tunewire.core.Collection;
 import dev.tunewire.core.Lrc;
 import dev.tunewire.core.PlaybackState;
 import dev.tunewire.core.Track;
+import dev.tunewire.hud.WorldLyrics;
 import dev.tunewire.lyrics.LyricsService;
 import dev.tunewire.spotify.Library;
 import dev.tunewire.spotify.SpotifyApi;
@@ -547,7 +548,7 @@ public final class PlayerScreen extends Screen {
         // screen's biggest per-frame cost
         boolean synced = ly.status() == LyricsService.Status.SYNCED;
         List<Lrc.Line> lines = ly.lrc().lines();
-        String layoutKey = ly.trackUri() + "#" + ly.chosen() + "#" + ly.status() + "#" + aw;
+        String layoutKey = ly.trackUri() + "#" + ly.chosen() + "#" + ly.status() + "#" + aw + "#" + c.censorLyrics;
         if (!layoutKey.equals(panelKey)) {
             panelRows = new ArrayList<>();
             int yy = 0;
@@ -555,6 +556,7 @@ public final class PlayerScreen extends Screen {
             for (int i = 0; i < count; i++) {
                 String text = synced ? lines.get(i).text() : ly.plain().get(i);
                 if (text.isEmpty()) text = synced ? "♪" : " ";
+                if (c.censorLyrics) text = dev.tunewire.core.Censor.clean(text);
                 for (FormattedCharSequence part : font.split(Component.literal(text), aw)) {
                     panelRows.add(new PanelRow(part, i, yy, font.width(part)));
                     yy += 10;
@@ -715,7 +717,7 @@ public final class PlayerScreen extends Screen {
         int ly = ny + 30;
         g.drawString(font, "NEXT UP", ax, ly, Draw.ACCENT, false);
         int ay = ly + 12, ah = y + h - 4 - ay;
-        List<Track> q = sp.queue();
+        List<Track> q = shown(sp.queue());
         if (q.isEmpty()) {
             g.drawString(font, sp.queueLoading() ? "Loading the queue…" : "The queue is empty.", ax + 4, ay + 4, Draw.MUTED, false);
             return;
@@ -748,7 +750,8 @@ public final class PlayerScreen extends Screen {
         }
         String d = PlaybackState.formatTime(t.durationMs());
         int textW = w - 26 - font.width(d) - 14;
-        g.drawString(font, Draw.ellipsize(font, t.title(), textW), tx, y + 3, playing ? Draw.ACCENT : Draw.TEXT, false);
+        int bw = t.explicit() ? Draw.explicitBadge(g, font, tx, y + 2) : 0;
+        g.drawString(font, Draw.ellipsize(font, t.title(), textW - bw), tx + bw, y + 3, playing ? Draw.ACCENT : Draw.TEXT, false);
         g.drawString(font, Draw.ellipsize(font, t.artistLine(), textW), tx, y + 13, Draw.MUTED, false);
         g.drawString(font, d, x + w - 6 - font.width(d), y + 8, Draw.FAINT, false);
     }
@@ -803,7 +806,8 @@ public final class PlayerScreen extends Screen {
         }
         resultsRect = new int[] {ax, ay, aw, ah};
         int rowH = 24;
-        int count = searchKind == null ? results.size() : collResults.size();
+        List<Track> songs = shown(results);
+        int count = searchKind == null ? songs.size() : collResults.size();
         double max = Math.max(0, count * rowH - ah);
         resultScroll = Math.max(0, Math.min(max, resultScroll));
         g.enableScissor(ax, ay, ax + aw, ay + ah);
@@ -811,7 +815,7 @@ public final class PlayerScreen extends Screen {
             int ry = ay + i * rowH - (int) resultScroll;
             if (ry + rowH < ay || ry > ay + ah) continue;
             if (searchKind == null) {
-                Track t = results.get(i);
+                Track t = songs.get(i);
                 trackRow(g, hmx, hmy, ax, ry, aw, ay, ah, t, -1, () -> SpotifyPlayer.INSTANCE.playTrack(t));
             } else {
                 Collection c = collResults.get(i);
@@ -840,7 +844,8 @@ public final class PlayerScreen extends Screen {
             tx = ax + 24;
         }
         int textW = ax + aw - tx - (hover ? 74 : 38);
-        g.drawString(font, Draw.ellipsize(font, t.title(), textW), tx, ry + 3, isPlaying ? Draw.ACCENT : Draw.TEXT, false);
+        int bw = t.explicit() ? Draw.explicitBadge(g, font, tx, ry + 2) : 0;
+        g.drawString(font, Draw.ellipsize(font, t.title(), textW - bw), tx + bw, ry + 3, isPlaying ? Draw.ACCENT : Draw.TEXT, false);
         String sub = t.artistLine() + (t.album().isEmpty() || number >= 1 ? "" : "  ·  " + t.album());
         g.drawString(font, Draw.ellipsize(font, sub, textW), tx, ry + 13, Draw.MUTED, false);
         int top = Math.max(ay, ry), bottom = Math.min(ay + ah, ry + rowH - 2);
@@ -998,7 +1003,7 @@ public final class PlayerScreen extends Screen {
         }
         libRect = new int[] {ax, ay, aw, ah};
         int rowH = 24;
-        List<Track> items = s.items();
+        List<Track> items = shown(s.items());
         int total = items.size() * rowH + (s.hasMore() || s.loading() ? 14 : 0);
         double max = Math.max(0, total - ah);
         libScroll = Math.max(0, Math.min(max, libScroll));
@@ -1099,31 +1104,46 @@ public final class PlayerScreen extends Screen {
         ry += sp(15);
         toggle(g, mx, my, rx, ry, rw, "Shade behind current line", () -> c.lyricsBackground, v -> c.lyricsBackground = v);
         ry += sp(15);
-        toggle(g, mx, my, rx, ry, rw, "Float lyrics in the world", () -> c.lyricsInWorld, v -> c.lyricsInWorld = v);
-        ry += sp(15);
-        if (c.lyricsInWorld) {
-            stepper(g, mx, my, rx, ry, rw, "  Distance", String.format("%.1f", c.worldDistance), () -> {
-                c.worldDistance = Math.max(1.5f, c.worldDistance - 0.5f);
-                TwConfig.save();
-            }, () -> {
-                c.worldDistance = Math.min(8f, c.worldDistance + 0.5f);
-                TwConfig.save();
+        // lyric style: HUD box / placed in the world / floating with the view
+        g.drawString(font, "Style", rx, ry + 1, Draw.MUTED, false);
+        String styleLabel = TwConfig.lyricsModeLabel(c.lyricsMode);
+        int sbw = Math.min(rw - 40, font.width(styleLabel) + 16);
+        button(g, mx, my, rx + rw - sbw, ry - 2, sbw, 13, styleLabel, false, () -> {
+            c.cycleLyricsMode();
+            TwConfig.save();
+            if (c.lyricsIn3d()) WorldLyrics.preview();
+        });
+        ry += sp(16);
+        if (c.lyricsIn3d()) {
+            ry = worldStepper(g, mx, my, rx, ry, rw, "  Distance", String.format("%.1f", c.worldDistance),
+                    () -> c.worldDistance = Math.max(1.5f, c.worldDistance - 0.5f),
+                    () -> c.worldDistance = Math.min(8f, c.worldDistance + 0.5f));
+            ry = worldStepper(g, mx, my, rx, ry, rw, "  Left / right", String.format("%+.2f", c.worldOffsetX),
+                    () -> c.worldOffsetX = Math.max(-4f, c.worldOffsetX - 0.25f),
+                    () -> c.worldOffsetX = Math.min(4f, c.worldOffsetX + 0.25f));
+            ry = worldStepper(g, mx, my, rx, ry, rw, "  Up / down", String.format("%+.2f", c.worldOffsetY),
+                    () -> c.worldOffsetY = Math.max(-4f, c.worldOffsetY - 0.25f),
+                    () -> c.worldOffsetY = Math.min(4f, c.worldOffsetY + 0.25f));
+            ry = worldStepper(g, mx, my, rx, ry, rw, "  Text size", Math.round(c.worldScale * 100) + "%",
+                    () -> c.worldScale = Math.max(0.5f, Math.round((c.worldScale - 0.1f) * 10) / 10f),
+                    () -> c.worldScale = Math.min(2.5f, Math.round((c.worldScale + 0.1f) * 10) / 10f));
+            toggle(g, mx, my, rx, ry, rw, "  Visible through blocks", () -> c.worldThroughWalls, v -> {
+                c.worldThroughWalls = v;
+                WorldLyrics.preview();
             });
-            ry += sp(16);
-            stepper(g, mx, my, rx, ry, rw, "  Text size", Math.round(c.worldScale * 100) + "%", () -> {
-                c.worldScale = Math.max(0.5f, Math.round((c.worldScale - 0.1f) * 10) / 10f);
-                TwConfig.save();
-            }, () -> {
-                c.worldScale = Math.min(2.5f, Math.round((c.worldScale + 0.1f) * 10) / 10f);
-                TwConfig.save();
-            });
-            ry += sp(16);
-            toggle(g, mx, my, rx, ry, rw, "  Visible through blocks", () -> c.worldThroughWalls, v -> c.worldThroughWalls = v);
             ry += sp(15);
         }
         ry += 1;
         stepper(g, mx, my, rx, ry, rw, "Lyrics offset", String.format("%+.2fs", c.lyricsOffsetMs / 1000.0),
                 () -> shiftOffset(-250), () -> shiftOffset(250));
+        ry += sp(18);
+        g.drawString(font, "EXPLICIT CONTENT", rx, ry, Draw.ACCENT, false);
+        ry += sp(14);
+        toggle(g, mx, my, rx, ry, rw, "Censor explicit lyrics", () -> c.censorLyrics, v -> c.censorLyrics = v);
+        ry += sp(15);
+        toggle(g, mx, my, rx, ry, rw, "Hide explicit songs in lists", () -> c.hideExplicit, v -> c.hideExplicit = v);
+        ry += sp(15);
+        toggle(g, mx, my, rx, ry, rw, "Skip explicit songs", () -> c.skipExplicit, v -> c.skipExplicit = v);
         ry += sp(18);
         g.drawString(font, "CONTROLS", rx, ry, Draw.ACCENT, false);
         ry += sp(14);
@@ -1368,6 +1388,43 @@ public final class PlayerScreen extends Screen {
     @Override
     public void removed() {
         TwConfig.save();
+    }
+
+    /** The list without explicit tracks when "Hide explicit songs" is on. */
+    private static List<Track> shown(List<Track> list) {
+        if (!TwConfig.get().hideExplicit) return list;
+        List<Track> out = new ArrayList<>(list.size());
+        for (Track t : list) if (!t.explicit()) out.add(t);
+        return out;
+    }
+
+    /** A 3D-lyrics placement stepper: saves and shows the lyrics in the world while you adjust. Returns the next row y. */
+    private int worldStepper(GuiGraphics g, int mx, int my, int rx, int ry, int rw, String label, String value,
+                             Runnable minus, Runnable plus) {
+        stepper(g, mx, my, rx, ry, rw, label, value, () -> {
+            minus.run();
+            TwConfig.save();
+            WorldLyrics.preview();
+        }, () -> {
+            plus.run();
+            TwConfig.save();
+            WorldLyrics.preview();
+        });
+        return ry + sp(16);
+    }
+
+    /** The Settings tab is open with a 3D lyric style: the world shows through and sample lyrics stay visible. */
+    public boolean adjustingWorldLyrics() {
+        return tab == Tab.SETTINGS && TwConfig.get().lyricsIn3d();
+    }
+
+    @Override
+    public void renderBackground(GuiGraphics g, int mx, int my, float delta) {
+        if (adjustingWorldLyrics()) {
+            g.fill(0, 0, width, height, 0x28000000); // no blur, so placement changes can be seen in the world
+            return;
+        }
+        super.renderBackground(g, mx, my, delta);
     }
 
     @Override

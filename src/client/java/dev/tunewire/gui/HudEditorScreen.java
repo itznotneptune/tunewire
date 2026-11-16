@@ -20,7 +20,7 @@ public final class HudEditorScreen extends Screen {
     private enum El { NOW_PLAYING, LYRICS }
 
     private static final PlaybackState SAMPLE = new PlaybackState(
-            new Track("", "spotify:track:sample", "Song Title", List.of("Artist Name"), "Album", 200_000, ""),
+            new Track("", "spotify:track:sample", "Song Title", List.of("Artist Name"), "Album", 200_000, "", false),
             true, 80_000, "", "", 50, true, false, "off", Long.MAX_VALUE);
 
     private final Screen parent;
@@ -34,7 +34,7 @@ public final class HudEditorScreen extends Screen {
 
     private boolean enabled(El e) {
         TwConfig c = TwConfig.get();
-        return e == El.NOW_PLAYING ? c.nowPlayingHud : c.lyricsHud && !c.lyricsInWorld;
+        return e == El.NOW_PLAYING ? c.nowPlayingHud : c.lyricsHud && !c.lyricsIn3d();
     }
 
     private int[] bounds(El e) {

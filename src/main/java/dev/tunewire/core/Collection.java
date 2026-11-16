@@ -81,7 +81,7 @@ public record Collection(Kind kind, String id, String uri, String name, String s
             if (t == null) continue;
             if (albumName != null && t.album().isEmpty()) {
                 t = new Track(t.id(), t.uri(), t.title(), t.artists(), albumName, t.durationMs(),
-                        t.imageUrl().isEmpty() ? albumImage : t.imageUrl());
+                        t.imageUrl().isEmpty() ? albumImage : t.imageUrl(), t.explicit());
             }
             out.add(t);
         }

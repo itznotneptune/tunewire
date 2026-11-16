@@ -8,7 +8,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** A Spotify track or episode, as the player and search endpoints return it. */
-public record Track(String id, String uri, String title, List<String> artists, String album, long durationMs, String imageUrl) {
+public record Track(String id, String uri, String title, List<String> artists, String album, long durationMs, String imageUrl,
+                    boolean explicit) {
     public String artistLine() {
         return String.join(", ", artists);
     }
@@ -41,7 +42,7 @@ public record Track(String id, String uri, String title, List<String> artists, S
         }
         artists.removeIf(String::isEmpty);
         return new Track(Json.str(o, "id"), uri, Json.str(o, "name"), List.copyOf(artists), album,
-                Json.lng(o, "duration_ms", 0), pickImage(images, 300));
+                Json.lng(o, "duration_ms", 0), pickImage(images, 300), Json.bool(o, "explicit"));
     }
 
     /** The image whose width is closest to {@code target}; images without a width count as 300 (Spotify's medium). */
