@@ -277,7 +277,7 @@ public final class PlayerScreen extends Screen {
         int sx = x + w - 20;
         Draw.pill(g, sx, y, sx + 20, y + 10, on ? Draw.ACCENT : Draw.TRACK);
         int kx = on ? sx + 11 : sx + 1;
-        Draw.round(g, kx, y + 1, kx + 8, y + 9, Draw.TEXT);
+        Draw.round(g, kx, y + 1, kx + 8, y + 9, Draw.FILL_WHITE);
         hit(x, y - 2, w, 14, () -> {
             set.accept(!on);
             TwConfig.save();
@@ -459,7 +459,7 @@ public final class PlayerScreen extends Screen {
         Draw.bar(g, lx, by, bw, 3, frac, sh ? 0xFF4BEF86 : Draw.ACCENT);
         if (sh && dur > 0) {
             int kx = lx + (int) Math.round(frac * bw);
-            Draw.round(g, kx - 3, by - 2, kx + 3, by + 5, Draw.TEXT);
+            Draw.round(g, kx - 3, by - 2, kx + 3, by + 5, Draw.FILL_WHITE);
         }
         g.drawString(font, PlaybackState.formatTime(pos), lx, by + 7, Draw.FAINT, false);
         String ds = PlaybackState.formatTime(dur);
@@ -469,7 +469,7 @@ public final class PlayerScreen extends Screen {
         int ccx = lx + bw / 2, ccy = by + 31;
         int r = 11;
         boolean phv = Draw.in(mx, my, ccx - r, ccy - r, r * 2, r * 2);
-        Draw.pill(g, ccx - r, ccy - r, ccx + r, ccy + r, phv ? 0xFFFFFFFF : 0xFFE4E4E4);
+        Draw.pill(g, ccx - r, ccy - r, ccx + r, ccy + r, phv ? Draw.FILL_WHITE : 0xFFDCDCE0);
         if (s.playing()) Draw.pause(g, ccx, ccy, 8, 0xFF000000);
         else Draw.triangleRight(g, ccx - 2, ccy, 10, 0xFF000000);
         hit(ccx - r, ccy - r, r * 2, r * 2, sp::togglePlay);
@@ -490,7 +490,7 @@ public final class PlayerScreen extends Screen {
             Draw.bar(g, vx, vy + 3, vw, 3, vol / 100.0, vh ? 0xFF4BEF86 : Draw.ACCENT);
             if (vh) {
                 int kx = vx + (int) Math.round(vol / 100.0 * vw);
-                Draw.round(g, kx - 3, vy + 1, kx + 3, vy + 8, Draw.TEXT);
+                Draw.round(g, kx - 3, vy + 1, kx + 3, vy + 8, Draw.FILL_WHITE);
             }
             g.drawString(font, vol + "%", vx + vw + 6, vy, Draw.MUTED, false);
         } else {
@@ -502,7 +502,7 @@ public final class PlayerScreen extends Screen {
 
     private void iconButton(GuiGraphics g, int mx, int my, int cx, int cy, Runnable action, Consumer<Integer> icon) {
         boolean hover = Draw.in(mx, my, cx - 9, cy - 9, 18, 18);
-        icon.accept(hover ? Draw.TEXT : 0xFFC8C8D0);
+        icon.accept(hover ? Draw.FILL_WHITE : 0xFFC8C8D0);
         hit(cx - 9, cy - 9, 18, 18, action);
     }
 
@@ -1098,7 +1098,7 @@ public final class PlayerScreen extends Screen {
         ry += sp(24);
         g.drawString(font, "LYRICS", rx, ry, Draw.ACCENT, false);
         ry += sp(14);
-        toggle(g, mx, my, rx, ry, rw, "Lyrics on the HUD", () -> c.lyricsHud, v -> c.lyricsHud = v);
+        toggle(g, mx, my, rx, ry, rw, "Show lyrics", () -> c.lyricsHud, v -> c.lyricsHud = v);
         ry += sp(15);
         toggle(g, mx, my, rx, ry, rw, "Show lines before and after", () -> c.lyricsLines == 3, v -> c.lyricsLines = v ? 3 : 1);
         ry += sp(15);

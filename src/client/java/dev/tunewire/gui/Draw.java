@@ -17,6 +17,12 @@ public final class Draw {
     public static final int BORDER = 0xFF2E3040;
     public static final int TRACK = 0xFF3A3D4C;
     public static final int TEXT = 0xFFFFFFFF;
+    /**
+     * White for filled shapes (buttons, knobs, icons). Never exactly #FFFFFF: some resource packs' core
+     * shaders treat pure white GUI fills as a marker colour and draw them transparent, which made the play
+     * and skip buttons vanish on hover. Text is unaffected (different shader), so {@link #TEXT} stays pure.
+     */
+    public static final int FILL_WHITE = 0xFFF4F4F6;
     public static final int MUTED = 0xFFAAAAAA;
     public static final int FAINT = 0xFF666670;
     public static final int BAD = 0xFFFF6B6B;
