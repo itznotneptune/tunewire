@@ -61,6 +61,12 @@ public final class TwConfig {
     public int playerY = -1;
     /** Player window fills the screen; the custom size is kept for when this is turned off. */
     public boolean playerFit = false;
+    /** Player layout: "tabs" (tabs across the top) or "app" (sidebar with your library, bottom playback bar). */
+    public String playerLayout = "tabs";
+
+    public boolean appLayout() {
+        return "app".equals(playerLayout);
+    }
 
     public HudPos nowPlayingPos = new HudPos(6, 6, 1f);
     /** x is the horizontal centre of the lyrics; negative means "centre of the screen". */
@@ -110,6 +116,7 @@ public final class TwConfig {
             lyricsMode = lyricsInWorld ? "world" : "hud"; // settings files from 0.2/0.3 only had the world toggle
         }
         lyricsInWorld = lyricsMode.equals("world");
+        if (!"app".equals(playerLayout)) playerLayout = "tabs";
         playerW = Math.max(0, playerW);
         playerH = Math.max(0, playerH);
     }

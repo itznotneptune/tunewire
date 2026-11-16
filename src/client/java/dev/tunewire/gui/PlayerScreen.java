@@ -127,17 +127,40 @@ public final class PlayerScreen extends Screen {
 
     /** Keeps the text boxes attached to the window while it moves or resizes. */
     private void positionWidgets() {
-        int x = px + 10, y = py + HEADER;
+        int[] r = contentRect();
         if (searchBox != null) {
-            searchBox.setX(x + 6);
-            searchBox.setY(y + 13);
-            searchBox.setWidth(pw - 32);
+            searchBox.setX(r[0] + 15);
+            searchBox.setY(r[1] + 13);
+            searchBox.setWidth(r[2] - 30);
         }
         if (clientIdBox != null) {
-            clientIdBox.setX(x + 5);
-            clientIdBox.setY(y + 44);
-            clientIdBox.setWidth(settingsLeftW() - 70);
+            clientIdBox.setX(r[0] + 14);
+            clientIdBox.setY(r[1] + 44);
+            clientIdBox.setWidth(settingsLeftW(r[2]) - 70);
         }
+    }
+
+    private static final int BAR = 50;
+
+    private int sidebarW() {
+        return clamp(pw / 4, 120, 180);
+    }
+
+    /** {x, y, w, h} of the area the current view draws in, for either layout. */
+    private int[] contentRect() {
+        if (TwConfig.get().appLayout()) {
+            int sb = sidebarW();
+            return new int[] {px + sb + 1, py + HEADER, pw - sb - 2, ph - HEADER - BAR};
+        }
+        return new int[] {px + 1, py + HEADER, pw - 2, ph - HEADER - FOOTER};
+    }
+
+    private void toggleLayout() {
+        TwConfig c = TwConfig.get();
+        c.playerLayout = c.appLayout() ? "tabs" : "app";
+        TwConfig.save();
+        devicesOpen = false;
+        positionWidgets();
     }
 
     private void toggleFit() {
@@ -153,9 +176,8 @@ public final class PlayerScreen extends Screen {
         layoutWindow();
         searchBox = null;
         clientIdBox = null;
-        int x = px + 10, y = py + HEADER;
         if (tab == Tab.SEARCH) {
-            searchBox = new EditBox(font, x + 6, y + 13, pw - 32, 12, Component.literal("Search"));
+            searchBox = new EditBox(font, 0, 0, 100, 12, Component.literal("Search")); // placed by positionWidgets()
             searchBox.setBordered(false);
             searchBox.setMaxLength(120);
             searchBox.setTextColor(Draw.TEXT);
@@ -168,7 +190,7 @@ public final class PlayerScreen extends Screen {
             setFocused(searchBox);
             searchBox.setFocused(true);
         } else if (tab == Tab.SETTINGS) {
-            clientIdBox = new EditBox(font, x + 5, y + 44, settingsLeftW() - 70, 12, Component.literal("Client ID"));
+            clientIdBox = new EditBox(font, 0, 0, 100, 12, Component.literal("Client ID"));
             clientIdBox.setBordered(false);
             clientIdBox.setMaxLength(64);
             clientIdBox.setTextColor(Draw.TEXT);
@@ -176,6 +198,7 @@ public final class PlayerScreen extends Screen {
             clientIdBox.setResponder(s -> clientIdText = s);
             addWidget(clientIdBox);
         }
+        positionWidgets();
     }
 
     private record PanelRow(FormattedCharSequence text, int lineIdx, int y, int width) {}
@@ -195,8 +218,9 @@ public final class PlayerScreen extends Screen {
         return (int) Math.round(n * rowScale);
     }
 
-    private int settingsLeftW() {
-        return (pw - 20) / 2 + 10;
+    /** Width of the Settings tab's left (account) column for a content area {@code w} wide. */
+    private int settingsLeftW(int w) {
+        return (w - 18) / 2 + 10;
     }
 
     private void setTab(Tab t) {
@@ -307,7 +331,7 @@ public final class PlayerScreen extends Screen {
     private void renderInner(GuiGraphics g, int mx, int my, float delta) {
         hits.clear();
         popupHits.clear();
-        seekRect = volRect = lyricsRect = resultsRect = popupRect = settingsRect = queueRect = libRect = null;
+        seekRect = volRect = lyricsRect = resultsRect = popupRect = settingsRect = queueRect = libRect = sideRect = null;
         layoutWindow(); // move/resize drags write the config, so this follows them too
         positionWidgets();
         int hmx = devicesOpen ? -1 : mx, hmy = devicesOpen ? -1 : my;
@@ -315,15 +339,16 @@ public final class PlayerScreen extends Screen {
         Draw.panel(g, px, py, px + pw, py + ph, Draw.PANEL, Draw.BORDER);
         g.fill(px + 1, py + HEADER - 1, px + pw - 1, py + HEADER, Draw.BORDER);
         g.drawString(font, "♫", px + 10, py + 9, Draw.ACCENT, false);
+        boolean app = TwConfig.get().appLayout();
         int tabsW = 0;
-        for (Tab t : Tab.values()) tabsW += font.width(t.label) + 12;
-        if (px + 21 + font.width("Tunewire") + 8 < px + pw - 8 - tabsW - 20) { // hide the name when the window is narrow
+        if (!app) for (Tab t : Tab.values()) tabsW += font.width(t.label) + 12;
+        if (px + 21 + font.width("Tunewire") + 8 < px + pw - 8 - tabsW - 40) { // hide the name when the window is narrow
             g.drawString(font, "Tunewire", px + 21, py + 9, Draw.TEXT, true);
         }
 
-        // tabs, right-aligned
+        // tabs, right-aligned (tabs layout only; the app layout navigates from its sidebar)
         int tx = px + pw - 8;
-        Tab[] tabs = Tab.values();
+        Tab[] tabs = app ? new Tab[0] : Tab.values();
         for (int i = tabs.length - 1; i >= 0; i--) {
             Tab t = tabs[i];
             int w = font.width(t.label) + 10;
@@ -353,24 +378,62 @@ public final class PlayerScreen extends Screen {
             g.fill(fbx + 3, py + 9, fbx + 13, py + 10, ic);
         }
         hit(fbx, py + 5, 16, 16, this::toggleFit);
-        if (fh) {
-            String tip = fit ? "Restore window size" : "Fit to screen";
-            int tw = font.width(tip);
-            g.drawString(font, tip, Math.max(px + 4, fbx + 8 - tw / 2), py + HEADER + 3, Draw.MUTED, true);
-        }
 
-        int cx = px + 1, cy = py + HEADER, cw = pw - 2, ch = ph - HEADER - FOOTER;
+        // layout switch: tabs ⇄ app-style (sidebar + playback bar)
+        int lbx = fbx - 18;
+        boolean lh = Draw.in(hmx, hmy, lbx, py + 5, 16, 16);
+        if (lh) Draw.round(g, lbx, py + 5, lbx + 16, py + 21, 0xFF262836);
+        int lc = lh ? Draw.TEXT : app ? Draw.ACCENT : Draw.MUTED;
+        Draw.outline(g, lbx + 3, py + 8, 11, 10, lc);
+        g.fill(lbx + 6, py + 9, lbx + 7, py + 17, lc);   // sidebar divider
+        g.fill(lbx + 7, py + 14, lbx + 13, py + 15, lc); // playback bar
+        hit(lbx, py + 5, 16, 16, this::toggleLayout);
+
+        String st = SpotifyPlayer.INSTANCE.status(6000);
+        boolean isNote = System.currentTimeMillis() - noteAt < 4000 && !note.isEmpty();
+
+        int[] r = contentRect();
+        int cx = r[0], cy = r[1], cw = r[2], ch = r[3];
+        if (app) {
+            renderSidebar(g, hmx, hmy, px + 1, py + HEADER, sidebarW(), ph - HEADER - BAR);
+            renderBar(g, hmx, hmy, px + 1, py + ph - BAR, pw - 2, BAR);
+            // status sits in the header in this layout (the bar replaces the footer)
+            String headStatus = isNote ? note : st;
+            if (!headStatus.isEmpty()) {
+                int right = lbx - 8, left = px + 21 + font.width("Tunewire") + 12;
+                String shown = Draw.ellipsize(font, headStatus, Math.max(0, right - left));
+                g.drawString(font, shown, right - font.width(shown), py + 9, isNote ? Draw.ACCENT : Draw.BAD, false);
+            }
+        }
         switch (tab) {
-            case PLAYER -> renderPlayer(g, hmx, hmy, cx, cy, cw, ch);
+            case PLAYER -> {
+                if (app) renderAppNowPlaying(g, hmx, hmy, cx, cy, cw, ch);
+                else renderPlayer(g, hmx, hmy, cx, cy, cw, ch);
+            }
             case QUEUE -> renderQueue(g, hmx, hmy, cx, cy, cw, ch);
             case LIBRARY -> renderLibrary(g, hmx, hmy, cx, cy, cw, ch);
             case SEARCH -> renderSearch(g, hmx, hmy, mx, my, delta, cx, cy, cw, ch);
             case SETTINGS -> renderSettings(g, hmx, hmy, mx, my, delta, cx, cy, cw, ch);
         }
 
+        // header button tooltips, drawn last so content never covers them
+        String tip = fh ? (fit ? "Restore window size" : "Fit to screen")
+                : lh ? (app ? "Switch to the tabs layout" : "Switch to the app layout (sidebar + playback bar)") : null;
+        if (tip != null) {
+            int tw = font.width(tip);
+            int tipX = Math.max(px + 4, Math.min(px + pw - tw - 4, (lh ? lbx : fbx) + 8 - tw / 2));
+            g.nextStratum();
+            g.fill(tipX - 3, py + HEADER + 1, tipX + tw + 3, py + HEADER + 13, 0xE0101116);
+            g.drawString(font, tip, tipX, py + HEADER + 3, Draw.MUTED, false);
+        }
+
+        if (app) {
+            renderGrip(g, hmx, hmy);
+            if (devicesOpen) renderDevices(g, mx, my);
+            return;
+        }
+
         // footer: status or hints
-        String st = SpotifyPlayer.INSTANCE.status(6000);
-        boolean isNote = System.currentTimeMillis() - noteAt < 4000 && !note.isEmpty();
         String footer = isNote ? note : !st.isEmpty() ? st
                 : tab == Tab.PLAYER ? "Space play/pause  •  ←/→ seek 10s  •  ↑/↓ volume  •  Esc close"
                 : tab == Tab.QUEUE ? "Add songs with +Q in Search  •  includes what Spotify plays next from the album or playlist"
@@ -379,19 +442,231 @@ public final class PlayerScreen extends Screen {
         int fc = isNote ? Draw.ACCENT : !st.isEmpty() ? Draw.BAD : Draw.FAINT;
         g.drawString(font, Draw.ellipsize(font, footer, pw - 34), px + 10, py + ph - 11, fc, false);
 
-        // resize grip, bottom-right
-        if (!TwConfig.get().playerFit) {
-            boolean gh = drag == Drag.RESIZE || Draw.in(hmx, hmy, px + pw - GRIP, py + ph - GRIP, GRIP, GRIP);
-            int gc = gh ? Draw.ACCENT : Draw.FAINT;
-            int gx = px + pw - 4, gy = py + ph - 4;
-            for (int a = 0; a < 3; a++) {
-                for (int b = 0; a + b < 3; b++) {
-                    g.fill(gx - a * 3, gy - b * 3, gx - a * 3 + 1, gy - b * 3 + 1, gc); // triangle of dots in the corner
-                }
+        renderGrip(g, hmx, hmy);
+        if (devicesOpen) renderDevices(g, mx, my);
+    }
+
+    /** Resize grip, bottom-right. */
+    private void renderGrip(GuiGraphics g, int hmx, int hmy) {
+        if (TwConfig.get().playerFit) return;
+        boolean gh = drag == Drag.RESIZE || Draw.in(hmx, hmy, px + pw - GRIP, py + ph - GRIP, GRIP, GRIP);
+        int gc = gh ? Draw.ACCENT : Draw.FAINT;
+        int gx = px + pw - 4, gy = py + ph - 4;
+        for (int a = 0; a < 3; a++) {
+            for (int b = 0; a + b < 3; b++) {
+                g.fill(gx - a * 3, gy - b * 3, gx - a * 3 + 1, gy - b * 3 + 1, gc); // triangle of dots in the corner
             }
         }
+    }
 
-        if (devicesOpen) renderDevices(g, mx, my);
+    // ---------------------------------------------------------------- app layout: sidebar, playback bar
+
+    private double sideScroll;
+    private int[] sideRect;
+
+    private void renderSidebar(GuiGraphics g, int mx, int my, int x, int y, int w, int h) {
+        g.fill(x, y, x + w, y + h, Draw.SIDEBAR);
+        g.fill(x + w, y, x + w + 1, y + h, Draw.BORDER);
+        int yy = y + 6;
+        yy = navItem(g, mx, my, x, yy, w, "♫", "Now Playing", Tab.PLAYER);
+        yy = navItem(g, mx, my, x, yy, w, "⌕", "Search", Tab.SEARCH);
+        yy = navItem(g, mx, my, x, yy, w, "≡", "Queue", Tab.QUEUE);
+        g.fill(x + 8, yy + 3, x + w - 8, yy + 4, Draw.BORDER);
+        yy += 9;
+        g.drawString(font, "YOUR LIBRARY", x + 9, yy, Draw.FAINT, false);
+        int settingsY = y + h - 20;
+        navItem(g, mx, my, x, settingsY, w, "⚙", "Settings", Tab.SETTINGS);
+        int ay = yy + 12, ah = settingsY - 4 - ay;
+        if (ah < 16) return;
+
+        if (!TokenStore.hasLogin()) {
+            g.drawString(font, Draw.ellipsize(font, "Not connected", w - 16), x + 9, ay + 2, Draw.MUTED, false);
+            return;
+        }
+        if (!TokenStore.hasLibraryScope()) {
+            List<FormattedCharSequence> lines = font.split(Component.literal("Reconnect to show your playlists here."), w - 16);
+            for (FormattedCharSequence l : lines) {
+                g.drawString(font, l, x + 9, ay + 2, Draw.MUTED, false);
+                ay += 10;
+            }
+            button(g, mx, my, x + 8, ay + 4, w - 16, 14, "Reconnect", true, this::connect);
+            return;
+        }
+        Library lib = Library.INSTANCE;
+        lib.ensureRoot();
+        List<Collection> entries = new ArrayList<>();
+        entries.add(Collection.liked(lib.likedTotal()));
+        entries.addAll(lib.playlists().items());
+        entries.addAll(lib.albums().items());
+        int rowH = 16;
+        sideRect = new int[] {x, ay, w, ah};
+        double max = Math.max(0, entries.size() * rowH - ah);
+        sideScroll = Math.max(0, Math.min(max, sideScroll));
+        Collection open = tab == Tab.LIBRARY ? lib.open() : null;
+        g.enableScissor(x, ay, x + w, ay + ah);
+        for (int i = 0; i < entries.size(); i++) {
+            int ry = ay + i * rowH - (int) sideScroll;
+            if (ry + rowH < ay || ry > ay + ah) continue;
+            Collection c = entries.get(i);
+            boolean sel = open != null && open.kind() == c.kind() && open.uri().equals(c.uri());
+            boolean hover = my >= ay && my < ay + ah && Draw.in(mx, my, x + 4, ry, w - 8, rowH);
+            if (sel) Draw.round(g, x + 4, ry, x + w - 4, ry + rowH, 0xFF262836);
+            else if (hover) Draw.round(g, x + 4, ry, x + w - 4, ry + rowH, 0xFF1F2029);
+            String icon = c.kind() == Collection.Kind.LIKED ? "♥" : c.kind() == Collection.Kind.ALBUM ? "◉" : "≡";
+            g.drawString(font, icon, x + 9, ry + 4, c.kind() == Collection.Kind.LIKED || sel ? Draw.ACCENT : Draw.FAINT, false);
+            g.drawString(font, Draw.ellipsize(font, c.name(), w - 30), x + 20, ry + 4, sel || hover ? Draw.TEXT : Draw.MUTED, false);
+            int top = Math.max(ay, ry), bottom = Math.min(ay + ah, ry + rowH);
+            if (bottom > top) hit(x + 4, top, w - 8, bottom - top, () -> {
+                Library.INSTANCE.openCollection(c);
+                libScroll = 0;
+                if (tab != Tab.LIBRARY) setTab(Tab.LIBRARY);
+            });
+        }
+        g.disableScissor();
+        // next page of playlists/albums as the end of the list scrolls into view
+        if (entries.size() * rowH - sideScroll < ah + 40) {
+            if (lib.playlists().hasMore()) lib.morePlaylists();
+            else if (lib.albums().hasMore()) lib.moreAlbums();
+        }
+    }
+
+    private int navItem(GuiGraphics g, int mx, int my, int x, int y, int w, String icon, String label, Tab t) {
+        boolean sel = tab == t;
+        boolean hover = Draw.in(mx, my, x + 4, y, w - 8, 16);
+        if (sel) Draw.round(g, x + 4, y, x + w - 4, y + 16, 0xFF262836);
+        else if (hover) Draw.round(g, x + 4, y, x + w - 4, y + 16, 0xFF1F2029);
+        g.drawString(font, icon, x + 9, y + 4, sel ? Draw.ACCENT : Draw.MUTED, false);
+        g.drawString(font, label, x + 21, y + 4, sel || hover ? Draw.TEXT : Draw.MUTED, false);
+        hit(x + 4, y, w - 8, 16, () -> {
+            if (t == Tab.LIBRARY) Library.INSTANCE.close();
+            if (tab != t) setTab(t);
+        });
+        return y + 17;
+    }
+
+    /** The bottom playback bar: track on the left, transport and seek in the middle, device and volume on the right. */
+    private void renderBar(GuiGraphics g, int mx, int my, int x, int y, int w, int h) {
+        g.fill(x, y, x + w, y + 1, Draw.BORDER);
+        g.fill(x, y + 1, x + w, y + h - 1, 0xF00E0F13);
+        SpotifyPlayer sp = SpotifyPlayer.INSTANCE;
+        PlaybackState s = sp.state();
+        Track t = s == null ? null : s.track();
+        int leftW = clamp(w * 3 / 10, 110, 240);
+        int sw = clamp(w - 2 * leftW - 120, 100, 380); // seek bar width, centred
+        int seekRight = x + w / 2 + sw / 2 + 36;      // its right edge, including the length label
+
+        // left: what's playing
+        int cover = 34;
+        if (t != null) {
+            Identifier id = CoverArt.INSTANCE.small();
+            if (id != null) Draw.texture(g, id, x + 8, y + 8, cover, CoverArt.SMALL);
+            else Draw.noCover(g, font, x + 8, y + 8, cover);
+            int tx = x + 8 + cover + 8, tw = leftW - cover - 20;
+            boolean th = Draw.in(mx, my, tx, y + 10, tw, 22);
+            int bw = t.explicit() ? Draw.explicitBadge(g, font, tx, y + 12) : 0;
+            g.drawString(font, Draw.ellipsize(font, t.title(), tw - bw), tx + bw, y + 13, th ? Draw.ACCENT : Draw.TEXT, false);
+            g.drawString(font, Draw.ellipsize(font, t.artistLine(), tw), tx, y + 25, Draw.MUTED, false);
+            hit(tx, y + 10, tw, 22, () -> {
+                if (tab != Tab.PLAYER) setTab(Tab.PLAYER);
+            });
+        } else {
+            g.drawString(font, TokenStore.hasLogin() ? "Nothing playing" : "Not connected", x + 10, y + 20, Draw.MUTED, false);
+        }
+
+        // right: device and volume
+        int vw = clamp(w / 9, 44, 90);
+        int vx = x + w - 14 - vw - 26;
+        int vy = y + 21;
+        if (s != null && s.volume() >= 0 && s.supportsVolume()) {
+            int vol = drag == Drag.VOLUME ? (int) Math.round(dragFrac * 100) : s.volume();
+            volRect = new int[] {vx, vy - 3, vw, 10};
+            boolean vh = drag == Drag.VOLUME || Draw.in(mx, my, vx, vy - 3, vw, 10);
+            Draw.bar(g, vx, vy, vw, 3, vol / 100.0, vh ? 0xFF4BEF86 : Draw.ACCENT);
+            if (vh) {
+                int kx = vx + (int) Math.round(vol / 100.0 * vw);
+                Draw.round(g, kx - 3, vy - 2, kx + 3, vy + 5, Draw.FILL_WHITE);
+            }
+            g.drawString(font, vol + "%", vx + vw + 5, vy - 2, Draw.FAINT, false);
+        }
+        if (TokenStore.hasLogin()) {
+            String dev = (s == null || s.deviceName().isEmpty() ? "Devices" : s.deviceName()) + " ▴";
+            int room = Math.max(24, vx - 10 - seekRight); // never run into the seek bar's time label
+            String shown = Draw.ellipsize(font, dev, room);
+            int dx = vx - 10 - font.width(shown);
+            boolean dh = Draw.in(mx, my, dx - 2, vy - 4, font.width(shown) + 4, 12);
+            g.drawString(font, shown, dx, vy - 2, dh || devicesOpen ? Draw.ACCENT : Draw.MUTED, false);
+            hit(dx - 2, vy - 4, font.width(shown) + 4, 12, this::toggleDevices);
+            devicesAnchor = new int[] {dx, py + ph}; // popup is clamped to sit just above the bar
+        }
+
+        // centre: transport and seek
+        int ccx = x + w / 2, ccy = y + 16;
+        int r = 9;
+        boolean phv = Draw.in(mx, my, ccx - r, ccy - r, r * 2, r * 2);
+        Draw.pill(g, ccx - r, ccy - r, ccx + r, ccy + r, phv ? Draw.FILL_WHITE : 0xFFDCDCE0);
+        if (s != null && s.playing()) Draw.pause(g, ccx, ccy, 6, 0xFF000000);
+        else Draw.triangleRight(g, ccx - 2, ccy, 8, 0xFF000000);
+        hit(ccx - r, ccy - r, r * 2, r * 2, sp::togglePlay);
+        iconButton(g, mx, my, ccx - 28, ccy, sp::previous, c -> Draw.prev(g, ccx - 28, ccy, c));
+        iconButton(g, mx, my, ccx + 28, ccy, sp::next, c -> Draw.next(g, ccx + 28, ccy, c));
+        glyphButton(g, mx, my, ccx - 54, ccy, "⇄", s != null && s.shuffle(), sp::toggleShuffle);
+        glyphButton(g, mx, my, ccx + 54, ccy, s != null && "track".equals(s.repeat()) ? "↻1" : "↻",
+                s != null && !"off".equals(s.repeat()), sp::cycleRepeat);
+
+        int sx = ccx - sw / 2, sy = y + 36;
+        long dur = t == null ? 0 : t.durationMs();
+        long pos = drag == Drag.SEEK ? (long) (dragFrac * dur) : sp.position();
+        double frac = dur > 0 ? pos / (double) dur : 0;
+        if (t != null) seekRect = new int[] {sx, sy - 3, sw, 10};
+        boolean sh = drag == Drag.SEEK || t != null && Draw.in(mx, my, sx, sy - 3, sw, 10);
+        Draw.bar(g, sx, sy, sw, 3, frac, sh ? 0xFF4BEF86 : Draw.ACCENT);
+        if (sh && dur > 0) {
+            int kx = sx + (int) Math.round(frac * sw);
+            Draw.round(g, kx - 3, sy - 2, kx + 3, sy + 5, Draw.FILL_WHITE);
+        }
+        String ps = PlaybackState.formatTime(pos), ds = PlaybackState.formatTime(dur);
+        g.drawString(font, ps, sx - 6 - font.width(ps), sy - 2, Draw.FAINT, false);
+        g.drawString(font, ds, sx + sw + 6, sy - 2, Draw.FAINT, false);
+    }
+
+    /** App layout's Now Playing view: large cover and track details, lyrics beside them. Controls live in the bar. */
+    private void renderAppNowPlaying(GuiGraphics g, int mx, int my, int x, int y, int w, int h) {
+        if (!TokenStore.hasLogin()) {
+            g.drawCenteredString(font, "Not connected to Spotify.", x + w / 2, y + h / 2 - 20, Draw.TEXT);
+            button(g, mx, my, x + w / 2 - 50, y + h / 2 - 4, 100, 16, "Open Settings", true, () -> setTab(Tab.SETTINGS));
+            return;
+        }
+        SpotifyPlayer sp = SpotifyPlayer.INSTANCE;
+        PlaybackState s = sp.state();
+        Track t = s == null ? null : s.track();
+        int cover = clamp(Math.min(h - 56, (w - 24) * 2 / 5), 64, CoverArt.LARGE);
+        int lx = x + 12, ly = y + 10;
+        if (t == null) {
+            g.drawString(font, sp.everPolled() ? "Nothing is playing on Spotify." : "Talking to Spotify…", lx, ly + 4, Draw.TEXT, false);
+            int yy = ly + 18;
+            for (FormattedCharSequence line : font.split(Component.literal(
+                    "Pick something from your library on the left, search for a song, or choose a device."), Math.max(80, w - 30))) {
+                g.drawString(font, line, lx, yy, Draw.MUTED, false);
+                yy += 10;
+            }
+            button(g, mx, my, lx, yy + 6, 96, 16, "Choose device", true, this::toggleDevices);
+            devicesAnchor = new int[] {lx, yy + 24};
+            return;
+        }
+        Identifier id = CoverArt.INSTANCE.large();
+        if (id != null) Draw.texture(g, id, lx, ly, cover, CoverArt.LARGE);
+        else Draw.noCover(g, font, lx, ly, cover);
+        int ty = ly + cover + 6;
+        List<FormattedCharSequence> titleLines = font.split(Component.literal(t.title()), cover);
+        int bw = t.explicit() ? Draw.explicitBadge(g, font, lx, ty - 1) : 0;
+        for (int i = 0; i < Math.min(2, titleLines.size()); i++) {
+            g.drawString(font, titleLines.get(i), lx + (i == 0 ? bw : 0), ty, Draw.TEXT, true);
+            ty += 10;
+        }
+        g.drawString(font, Draw.ellipsize(font, t.artistLine(), cover), lx, ty + 1, Draw.MUTED, false);
+        if (!t.album().isEmpty()) g.drawString(font, Draw.ellipsize(font, t.album(), cover), lx, ty + 12, Draw.FAINT, false);
+        int lyricsX = lx + cover + 12, lyricsW = x + w - 8 - lyricsX;
+        if (lyricsW >= 100) renderLyrics(g, mx, my, lyricsX, y + 6, lyricsW, h - 12, t);
     }
 
     // ---------------------------------------------------------------- now playing
@@ -1027,7 +1302,7 @@ public final class PlayerScreen extends Screen {
 
     private void renderSettings(GuiGraphics g, int mx, int my, int rmx, int rmy, float delta, int x, int y, int w, int h) {
         TwConfig c = TwConfig.get();
-        int lx = x + 10, lw = settingsLeftW() - 18;
+        int lx = x + 10, lw = settingsLeftW(w) - 18;
         int yy = y + 10;
         g.drawString(font, "SPOTIFY ACCOUNT", lx, yy, Draw.ACCENT, false);
         yy += 13;
@@ -1076,7 +1351,7 @@ public final class PlayerScreen extends Screen {
         });
 
         // right column
-        int rx = x + settingsLeftW() + 4, rw = w - settingsLeftW() - 16;
+        int rx = x + settingsLeftW(w) + 4, rw = w - settingsLeftW(w) - 16;
         g.fill(rx - 8, y + 8, rx - 7, y + h - 8, Draw.BORDER);
         // the column scrolls: rows outside it are clipped and their clicks dropped
         int areaTop = y + 4, areaBottom = y + h - 4;
@@ -1306,6 +1581,10 @@ public final class PlayerScreen extends Screen {
         }
         if (settingsRect != null && Draw.in(mx, my, settingsRect[0], settingsRect[1], settingsRect[2], settingsRect[3])) {
             settingsScroll -= sy * 20;
+            return true;
+        }
+        if (sideRect != null && Draw.in(mx, my, sideRect[0], sideRect[1], sideRect[2], sideRect[3])) {
+            sideScroll -= sy * 20;
             return true;
         }
         if (libRect != null && Draw.in(mx, my, libRect[0], libRect[1], libRect[2], libRect[3])) {
