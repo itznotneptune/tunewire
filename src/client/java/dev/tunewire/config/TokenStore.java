@@ -23,11 +23,19 @@ public final class TokenStore {
         public String clientId = "";
         public String accessToken = "";
         public String refreshToken = "";
+        /** Space-separated scopes Spotify granted; empty for logins from before 0.3.0. */
+        public String scope = "";
         /** Epoch millis the access token stops working. */
         public long expiresAt;
     }
 
     private static volatile Tokens tokens = new Tokens();
+
+    /** Whether the login includes the playlist/library permissions added in 0.3.0 (older logins must reconnect). */
+    public static boolean hasLibraryScope() {
+        String s = tokens.scope == null ? "" : tokens.scope;
+        return s.contains("playlist-read-private") && s.contains("user-library-read");
+    }
 
     private TokenStore() {}
 

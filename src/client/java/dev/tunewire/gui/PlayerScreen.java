@@ -4,10 +4,12 @@ import dev.tunewire.TunewireClient;
 import dev.tunewire.art.CoverArt;
 import dev.tunewire.config.TokenStore;
 import dev.tunewire.config.TwConfig;
+import dev.tunewire.core.Collection;
 import dev.tunewire.core.Lrc;
 import dev.tunewire.core.PlaybackState;
 import dev.tunewire.core.Track;
 import dev.tunewire.lyrics.LyricsService;
+import dev.tunewire.spotify.Library;
 import dev.tunewire.spotify.SpotifyApi;
 import dev.tunewire.spotify.SpotifyAuth;
 import dev.tunewire.spotify.SpotifyPlayer;
@@ -34,7 +36,7 @@ import java.util.function.Consumer;
  */
 public final class PlayerScreen extends Screen {
     private enum Tab {
-        PLAYER("Now Playing"), QUEUE("Queue"), SEARCH("Search"), SETTINGS("Settings");
+        PLAYER("Now Playing"), QUEUE("Queue"), LIBRARY("Library"), SEARCH("Search"), SETTINGS("Settings");
 
         final String label;
 
@@ -54,6 +56,11 @@ public final class PlayerScreen extends Screen {
     private static String searchText = "";
     private static String lastQuery = "";
     private static List<Track> results = List.of();
+    private static List<Collection> collResults = List.of();
+    /** null = songs. */
+    private static Collection.Kind searchKind = null;
+    private double libScroll;
+    private int[] libRect;
 
     private static final int HEADER = 26, FOOTER = 14;
 
@@ -215,6 +222,7 @@ public final class PlayerScreen extends Screen {
         String q = searchText.strip();
         if (q.isEmpty()) {
             results = List.of();
+            collResults = List.of();
             lastQuery = "";
             searchStatus = "";
             return;
@@ -223,7 +231,10 @@ public final class PlayerScreen extends Screen {
         lastQuery = q;
         int seq = ++searchSeq;
         searchStatus = "Searching…";
-        SpotifyPlayer.INSTANCE.search(q).whenComplete((list, ex) -> minecraft.execute(() -> {
+        Collection.Kind kind = searchKind;
+        java.util.concurrent.CompletableFuture<? extends List<?>> f = kind == null
+                ? SpotifyPlayer.INSTANCE.search(q) : Library.INSTANCE.search(q, kind);
+        f.whenComplete((list, ex) -> minecraft.execute(() -> {
             if (seq != searchSeq) return;
             if (ex != null) {
                 Throwable c = SpotifyApi.cause(ex);
@@ -231,10 +242,16 @@ public final class PlayerScreen extends Screen {
                 lastQuery = "";
                 return;
             }
-            results = list;
+            if (kind == null) results = castList(list);
+            else collResults = castList(list);
             resultScroll = 0;
             searchStatus = list.isEmpty() ? "No results for \"" + q + "\"" : "";
         }));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> List<T> castList(List<?> l) {
+        return (List<T>) l;
     }
 
     // ------------------------------------------------------------------ immediate-mode helpers
@@ -289,7 +306,7 @@ public final class PlayerScreen extends Screen {
     private void renderInner(GuiGraphics g, int mx, int my, float delta) {
         hits.clear();
         popupHits.clear();
-        seekRect = volRect = lyricsRect = resultsRect = popupRect = settingsRect = queueRect = null;
+        seekRect = volRect = lyricsRect = resultsRect = popupRect = settingsRect = queueRect = libRect = null;
         layoutWindow(); // move/resize drags write the config, so this follows them too
         positionWidgets();
         int hmx = devicesOpen ? -1 : mx, hmy = devicesOpen ? -1 : my;
@@ -297,21 +314,25 @@ public final class PlayerScreen extends Screen {
         Draw.panel(g, px, py, px + pw, py + ph, Draw.PANEL, Draw.BORDER);
         g.fill(px + 1, py + HEADER - 1, px + pw - 1, py + HEADER, Draw.BORDER);
         g.drawString(font, "♫", px + 10, py + 9, Draw.ACCENT, false);
-        g.drawString(font, "Tunewire", px + 21, py + 9, Draw.TEXT, true);
+        int tabsW = 0;
+        for (Tab t : Tab.values()) tabsW += font.width(t.label) + 12;
+        if (px + 21 + font.width("Tunewire") + 8 < px + pw - 8 - tabsW - 20) { // hide the name when the window is narrow
+            g.drawString(font, "Tunewire", px + 21, py + 9, Draw.TEXT, true);
+        }
 
         // tabs, right-aligned
         int tx = px + pw - 8;
         Tab[] tabs = Tab.values();
         for (int i = tabs.length - 1; i >= 0; i--) {
             Tab t = tabs[i];
-            int w = font.width(t.label) + 14;
+            int w = font.width(t.label) + 10;
             tx -= w;
             boolean sel = t == tab;
             boolean hover = Draw.in(hmx, hmy, tx, py + 5, w, 16);
             if (sel) Draw.round(g, tx, py + 5, tx + w, py + 21, 0xFF262836);
             else if (hover) Draw.round(g, tx, py + 5, tx + w, py + 21, 0xFF1F2029);
             if (sel) g.fill(tx + 4, py + 19, tx + w - 4, py + 20, Draw.ACCENT);
-            g.drawString(font, t.label, tx + 7, py + 9, sel || hover ? Draw.TEXT : Draw.MUTED, false);
+            g.drawString(font, t.label, tx + 5, py + 9, sel || hover ? Draw.TEXT : Draw.MUTED, false);
             hit(tx, py + 5, w, 16, () -> setTab(t));
             tx -= 2;
         }
@@ -341,6 +362,7 @@ public final class PlayerScreen extends Screen {
         switch (tab) {
             case PLAYER -> renderPlayer(g, hmx, hmy, cx, cy, cw, ch);
             case QUEUE -> renderQueue(g, hmx, hmy, cx, cy, cw, ch);
+            case LIBRARY -> renderLibrary(g, hmx, hmy, cx, cy, cw, ch);
             case SEARCH -> renderSearch(g, hmx, hmy, mx, my, delta, cx, cy, cw, ch);
             case SETTINGS -> renderSettings(g, hmx, hmy, mx, my, delta, cx, cy, cw, ch);
         }
@@ -351,6 +373,7 @@ public final class PlayerScreen extends Screen {
         String footer = isNote ? note : !st.isEmpty() ? st
                 : tab == Tab.PLAYER ? "Space play/pause  •  ←/→ seek 10s  •  ↑/↓ volume  •  Esc close"
                 : tab == Tab.QUEUE ? "Add songs with +Q in Search  •  includes what Spotify plays next from the album or playlist"
+                : tab == Tab.LIBRARY ? "Click a playlist or album to open it  •  ▶ plays it as a whole"
                 : tab == Tab.SEARCH ? "Enter to search  •  click a song to play it, or + to queue it" : "Esc close";
         int fc = isNote ? Draw.ACCENT : !st.isEmpty() ? Draw.BAD : Draw.FAINT;
         g.drawString(font, Draw.ellipsize(font, footer, pw - 34), px + 10, py + ph - 11, fc, false);
@@ -432,7 +455,7 @@ public final class PlayerScreen extends Screen {
         seekRect = new int[] {lx, by - 3, bw, 10};
         boolean sh = drag == Drag.SEEK || Draw.in(mx, my, lx, by - 3, bw, 10);
         double frac = dur > 0 ? pos / (double) dur : 0;
-        Draw.bar(g, lx, by, bw, 3, frac, sh ? Draw.ACCENT : Draw.TEXT);
+        Draw.bar(g, lx, by, bw, 3, frac, sh ? 0xFF4BEF86 : Draw.ACCENT);
         if (sh && dur > 0) {
             int kx = lx + (int) Math.round(frac * bw);
             Draw.round(g, kx - 3, by - 2, kx + 3, by + 5, Draw.TEXT);
@@ -463,7 +486,7 @@ public final class PlayerScreen extends Screen {
             int vol = drag == Drag.VOLUME ? (int) Math.round(dragFrac * 100) : s.volume();
             volRect = new int[] {vx, vy - 1, vw, 10};
             boolean vh = drag == Drag.VOLUME || Draw.in(mx, my, vx, vy - 1, vw, 10);
-            Draw.bar(g, vx, vy + 3, vw, 3, vol / 100.0, vh ? Draw.ACCENT : Draw.TEXT);
+            Draw.bar(g, vx, vy + 3, vw, 3, vol / 100.0, vh ? 0xFF4BEF86 : Draw.ACCENT);
             if (vh) {
                 int kx = vx + (int) Math.round(vol / 100.0 * vw);
                 Draw.round(g, kx - 3, vy + 1, kx + 3, vy + 8, Draw.TEXT);
@@ -744,50 +767,253 @@ public final class PlayerScreen extends Screen {
             g.drawCenteredString(font, "Connect Spotify in Settings to search.", x + w / 2, y + 60, Draw.MUTED);
             return;
         }
-        int ay = y + 32, ah = h - 34, ax = fx, aw = fw;
+        // mode chips: songs / playlists / albums
+        int chipX = fx;
+        String[] labels = {"Songs", "Playlists", "Albums"};
+        Collection.Kind[] kinds = {null, Collection.Kind.PLAYLIST, Collection.Kind.ALBUM};
+        for (int i = 0; i < labels.length; i++) {
+            int cw = font.width(labels[i]) + 12;
+            boolean sel = searchKind == kinds[i];
+            boolean hover = Draw.in(hmx, hmy, chipX, y + 30, cw, 13);
+            Draw.pill(g, chipX, y + 30, chipX + cw, y + 43, sel ? Draw.ACCENT : hover ? 0xFF34374A : 0xFF2A2C3A);
+            g.drawString(font, labels[i], chipX + 6, y + 33, sel ? 0xFF000000 : Draw.TEXT, false);
+            Collection.Kind k = kinds[i];
+            hit(chipX, y + 30, cw, 13, () -> {
+                if (searchKind == k) return;
+                searchKind = k;
+                lastQuery = "";
+                resultScroll = 0;
+                runSearch(true);
+            });
+            chipX += cw + 4;
+        }
+
+        int ay = y + 48, ah = h - 50, ax = fx, aw = fw;
+        boolean empty = searchKind == null ? results.isEmpty() : collResults.isEmpty();
         if (!searchStatus.isEmpty()) {
-            g.drawCenteredString(font, searchStatus, x + w / 2, ay + 20, Draw.MUTED);
-            if (results.isEmpty()) return;
+            g.drawCenteredString(font, searchStatus, x + w / 2, ay + 14, Draw.MUTED);
+            if (empty) return;
             ay += 14;
             ah -= 14;
-        } else if (results.isEmpty()) {
-            g.drawCenteredString(font, "Type to search Spotify. Results play on your active device.", x + w / 2, ay + 20, Draw.FAINT);
+        } else if (empty) {
+            String hint = searchKind == null ? "Type to search Spotify. Results play on your active device."
+                    : "Type to search " + (searchKind == Collection.Kind.ALBUM ? "albums." : "playlists.");
+            g.drawCenteredString(font, hint, x + w / 2, ay + 14, Draw.FAINT);
             return;
         }
         resultsRect = new int[] {ax, ay, aw, ah};
         int rowH = 24;
-        double max = Math.max(0, results.size() * rowH - ah);
+        int count = searchKind == null ? results.size() : collResults.size();
+        double max = Math.max(0, count * rowH - ah);
         resultScroll = Math.max(0, Math.min(max, resultScroll));
-        Track playing = SpotifyPlayer.INSTANCE.track();
         g.enableScissor(ax, ay, ax + aw, ay + ah);
-        for (int i = 0; i < results.size(); i++) {
+        for (int i = 0; i < count; i++) {
             int ry = ay + i * rowH - (int) resultScroll;
             if (ry + rowH < ay || ry > ay + ah) continue;
-            Track t = results.get(i);
-            boolean inArea = hmy >= ay && hmy < ay + ah;
-            boolean hover = inArea && Draw.in(hmx, hmy, ax, ry, aw, rowH - 2);
-            Draw.round(g, ax, ry, ax + aw, ry + rowH - 2, hover ? Draw.CARD_HOVER : Draw.CARD);
-            boolean isPlaying = playing != null && playing.uri().equals(t.uri());
-            int textW = aw - 16 - (hover ? 70 : 34);
-            g.drawString(font, Draw.ellipsize(font, t.title(), textW), ax + 6, ry + 3, isPlaying ? Draw.ACCENT : Draw.TEXT, false);
-            String sub = t.artistLine() + (t.album().isEmpty() ? "" : "  ·  " + t.album());
-            g.drawString(font, Draw.ellipsize(font, sub, textW), ax + 6, ry + 13, Draw.MUTED, false);
-            int top = Math.max(ay, ry), bottom = Math.min(ay + ah, ry + rowH - 2);
-            if (bottom > top) hit(ax, top, aw, bottom - top, () -> SpotifyPlayer.INSTANCE.playTrack(t));
-            if (hover) {
-                int bx = ax + aw - 66;
-                Draw.round(g, bx, ry + 5, bx + 30, ry + 17, Draw.ACCENT);
-                Draw.triangleRight(g, bx + 12, ry + 11, 6, 0xFF000000);
-                Draw.round(g, bx + 34, ry + 5, bx + 62, ry + 17, 0xFF34374A);
-                g.drawCenteredString(font, "+Q", bx + 48, ry + 7, Draw.TEXT);
-                if (bottom > top) {
-                    hit(bx, Math.max(ay, ry + 5), 30, 12, () -> SpotifyPlayer.INSTANCE.playTrack(t));
-                    hit(bx + 34, Math.max(ay, ry + 5), 28, 12, () -> SpotifyPlayer.INSTANCE.queue(t));
-                }
+            if (searchKind == null) {
+                Track t = results.get(i);
+                trackRow(g, hmx, hmy, ax, ry, aw, ay, ah, t, -1, () -> SpotifyPlayer.INSTANCE.playTrack(t));
             } else {
-                String d = PlaybackState.formatTime(t.durationMs());
-                g.drawString(font, d, ax + aw - 6 - font.width(d), ry + 8, Draw.FAINT, false);
+                Collection c = collResults.get(i);
+                collectionRow(g, hmx, hmy, ax, ry, aw, ay, ah, c, () -> {
+                    Library.INSTANCE.openCollection(c);
+                    libScroll = 0;
+                    setTab(Tab.LIBRARY);
+                });
             }
+        }
+        g.disableScissor();
+    }
+
+    /** A song row: title, artist · album, length; on hover ▶ and +Q buttons. {@code number} ≥ 1 shows a track number. */
+    private void trackRow(GuiGraphics g, int hmx, int hmy, int ax, int ry, int aw, int ay, int ah, Track t, int number, Runnable play) {
+        int rowH = 24;
+        boolean inArea = hmy >= ay && hmy < ay + ah;
+        boolean hover = inArea && Draw.in(hmx, hmy, ax, ry, aw, rowH - 2);
+        Draw.round(g, ax, ry, ax + aw, ry + rowH - 2, hover ? Draw.CARD_HOVER : Draw.CARD);
+        Track playing = SpotifyPlayer.INSTANCE.track();
+        boolean isPlaying = playing != null && playing.uri().equals(t.uri());
+        int tx = ax + 6;
+        if (number >= 1) {
+            String n = String.valueOf(number);
+            g.drawString(font, n, ax + 12 - font.width(n) / 2, ry + 8, isPlaying ? Draw.ACCENT : Draw.FAINT, false);
+            tx = ax + 24;
+        }
+        int textW = ax + aw - tx - (hover ? 74 : 38);
+        g.drawString(font, Draw.ellipsize(font, t.title(), textW), tx, ry + 3, isPlaying ? Draw.ACCENT : Draw.TEXT, false);
+        String sub = t.artistLine() + (t.album().isEmpty() || number >= 1 ? "" : "  ·  " + t.album());
+        g.drawString(font, Draw.ellipsize(font, sub, textW), tx, ry + 13, Draw.MUTED, false);
+        int top = Math.max(ay, ry), bottom = Math.min(ay + ah, ry + rowH - 2);
+        if (bottom > top) hit(ax, top, aw, bottom - top, play);
+        if (hover) {
+            int bx = ax + aw - 66;
+            Draw.round(g, bx, ry + 5, bx + 30, ry + 17, Draw.ACCENT);
+            Draw.triangleRight(g, bx + 12, ry + 11, 6, 0xFF000000);
+            Draw.round(g, bx + 34, ry + 5, bx + 62, ry + 17, 0xFF34374A);
+            g.drawCenteredString(font, "+Q", bx + 48, ry + 7, Draw.TEXT);
+            if (bottom > top) {
+                hit(bx, Math.max(ay, ry + 5), 30, 12, play);
+                hit(bx + 34, Math.max(ay, ry + 5), 28, 12, () -> SpotifyPlayer.INSTANCE.queue(t));
+            }
+        } else {
+            String d = PlaybackState.formatTime(t.durationMs());
+            g.drawString(font, d, ax + aw - 6 - font.width(d), ry + 8, Draw.FAINT, false);
+        }
+    }
+
+    /** A playlist/album row: name, owner or artist · song count; click opens it, ▶ plays it. */
+    private void collectionRow(GuiGraphics g, int hmx, int hmy, int ax, int ry, int aw, int ay, int ah, Collection c, Runnable open) {
+        int rowH = 24;
+        boolean inArea = hmy >= ay && hmy < ay + ah;
+        boolean hover = inArea && Draw.in(hmx, hmy, ax, ry, aw, rowH - 2);
+        Draw.round(g, ax, ry, ax + aw, ry + rowH - 2, hover ? Draw.CARD_HOVER : Draw.CARD);
+        String icon = switch (c.kind()) {
+            case LIKED -> "♥";
+            case ALBUM -> "◉";
+            case PLAYLIST -> "≡";
+        };
+        g.drawString(font, icon, ax + 8, ry + 8, c.kind() == Collection.Kind.LIKED ? Draw.ACCENT : Draw.MUTED, false);
+        int tx = ax + 22, textW = aw - 22 - (hover ? 44 : 10);
+        g.drawString(font, Draw.ellipsize(font, c.name(), textW), tx, ry + 3, Draw.TEXT, false);
+        String sub = c.subtitle() + (c.total() >= 0 ? (c.subtitle().isEmpty() ? "" : "  ·  ") + c.total() + (c.total() == 1 ? " song" : " songs") : "");
+        g.drawString(font, Draw.ellipsize(font, sub, textW), tx, ry + 13, Draw.MUTED, false);
+        int top = Math.max(ay, ry), bottom = Math.min(ay + ah, ry + rowH - 2);
+        if (bottom > top) hit(ax, top, aw, bottom - top, open);
+        if (hover && c.kind() != Collection.Kind.LIKED) {
+            int bx = ax + aw - 36;
+            Draw.round(g, bx, ry + 5, bx + 30, ry + 17, Draw.ACCENT);
+            Draw.triangleRight(g, bx + 12, ry + 11, 6, 0xFF000000);
+            if (bottom > top) hit(bx, Math.max(ay, ry + 5), 30, 12, () -> SpotifyPlayer.INSTANCE.playCollection(c, List.of(), null));
+        }
+    }
+
+    // ---------------------------------------------------------------- library
+
+    private void renderLibrary(GuiGraphics g, int mx, int my, int x, int y, int w, int h) {
+        if (!TokenStore.hasLogin()) {
+            g.drawCenteredString(font, "Connect Spotify in Settings to see your library.", x + w / 2, y + h / 2 - 4, Draw.MUTED);
+            return;
+        }
+        if (!TokenStore.hasLibraryScope()) {
+            int yy = y + h / 2 - 30;
+            for (FormattedCharSequence line : font.split(Component.literal(
+                    "Tunewire needs permission to read your playlists and saved music. Reconnect once to allow it."), w - 60)) {
+                g.drawCenteredString(font, line, x + w / 2, yy, Draw.MUTED);
+                yy += 10;
+            }
+            button(g, mx, my, x + w / 2 - 60, yy + 8, 120, 16, "Reconnect Spotify", true, this::connect);
+            return;
+        }
+        Library lib = Library.INSTANCE;
+        lib.ensureRoot();
+        if (lib.open() != null) {
+            renderCollection(g, mx, my, x, y, w, h, lib.open());
+            return;
+        }
+        int ax = x + 9, aw = w - 18;
+        g.drawString(font, "YOUR LIBRARY", ax, y + 8, Draw.ACCENT, false);
+        button(g, mx, my, ax + aw - 56, y + 4, 56, 14, "Refresh", false, lib::refresh);
+
+        int ay = y + 22, ah = h - 24;
+        libRect = new int[] {ax, ay, aw, ah};
+        Library.ListState<Collection> pl = lib.playlists(), al = lib.albums();
+        int rowH = 24, headH = 14;
+        // total height first, to clamp the scroll
+        int total = rowH + headH + Math.max(1, pl.items().size()) * rowH + (pl.hasMore() || pl.loading() ? 14 : 0)
+                + headH + Math.max(1, al.items().size()) * rowH + (al.hasMore() || al.loading() ? 14 : 0);
+        double max = Math.max(0, total - ah);
+        libScroll = Math.max(0, Math.min(max, libScroll));
+        int ry = ay - (int) libScroll;
+        g.enableScissor(ax, ay, ax + aw, ay + ah);
+
+        Collection liked = Collection.liked(lib.likedTotal());
+        collectionRow(g, mx, my, ax, ry, aw, ay, ah, liked, () -> openLib(liked));
+        ry += rowH;
+
+        ry = libSection(g, mx, my, ax, ry, aw, ay, ah, "PLAYLISTS", pl, "No playlists yet.", lib::morePlaylists);
+        ry = libSection(g, mx, my, ax, ry, aw, ay, ah, "SAVED ALBUMS", al, "No saved albums.", lib::moreAlbums);
+        g.disableScissor();
+    }
+
+    private int libSection(GuiGraphics g, int mx, int my, int ax, int ry, int aw, int ay, int ah, String title,
+                           Library.ListState<Collection> s, String emptyText, Runnable more) {
+        g.drawString(font, title, ax + 2, ry + 4, Draw.FAINT, false);
+        ry += 14;
+        if (s.items().isEmpty()) {
+            String msg = !s.error().isEmpty() ? s.error() : s.loading() || s.total() < 0 ? "Loading…" : emptyText;
+            g.drawString(font, Draw.ellipsize(font, msg, aw - 8), ax + 6, ry + 8, s.error().isEmpty() ? Draw.MUTED : Draw.BAD, false);
+            return ry + 24;
+        }
+        for (Collection c : s.items()) {
+            if (ry + 24 >= ay && ry <= ay + ah) collectionRow(g, mx, my, ax, ry, aw, ay, ah, c, () -> openLib(c));
+            ry += 24;
+        }
+        if (s.hasMore() || s.loading()) {
+            g.drawString(font, s.loading() ? "Loading more…" : "", ax + 6, ry + 2, Draw.FAINT, false);
+            if (ry < ay + ah + 40) more.run(); // next page as the end scrolls into view
+            ry += 14;
+        }
+        return ry;
+    }
+
+    private void openLib(Collection c) {
+        Library.INSTANCE.openCollection(c);
+        libScroll = 0;
+    }
+
+    private void renderCollection(GuiGraphics g, int mx, int my, int x, int y, int w, int h, Collection c) {
+        Library lib = Library.INSTANCE;
+        int ax = x + 9, aw = w - 18;
+        button(g, mx, my, ax, y + 5, 40, 14, "‹ Back", false, () -> {
+            lib.close();
+            libScroll = 0;
+        });
+        Library.ListState<Track> s = lib.openTracks();
+        boolean canPlay = c.kind() != Collection.Kind.LIKED || !s.items().isEmpty();
+        int playW = 50;
+        if (canPlay) button(g, mx, my, ax + aw - playW, y + 5, playW, 14, "▶ Play", true,
+                () -> SpotifyPlayer.INSTANCE.playCollection(c, s.items(), null));
+        int nameW = aw - 48 - playW - 8;
+        g.drawString(font, Draw.ellipsize(font, c.name(), nameW), ax + 48, y + 4, Draw.TEXT, true);
+        String sub = c.subtitle() + (c.total() >= 0 ? (c.subtitle().isEmpty() ? "" : "  ·  ") + c.total() + " songs" : "");
+        g.drawString(font, Draw.ellipsize(font, sub, nameW), ax + 48, y + 14, Draw.MUTED, false);
+
+        int ay = y + 28, ah = h - 30;
+        String note = lib.openNote();
+        if (!note.isEmpty()) {
+            for (FormattedCharSequence line : font.split(Component.literal(note), aw - 8)) {
+                g.drawString(font, line, ax + 4, ay + 2, Draw.MUTED, false);
+                ay += 10;
+                ah -= 10;
+            }
+            ay += 4;
+            ah -= 4;
+        }
+        if (s.items().isEmpty()) {
+            if (note.isEmpty()) {
+                String msg = !s.error().isEmpty() ? s.error() : s.loading() || s.total() < 0 ? "Loading songs…" : "No songs here.";
+                g.drawString(font, Draw.ellipsize(font, msg, aw - 8), ax + 4, ay + 6, s.error().isEmpty() ? Draw.MUTED : Draw.BAD, false);
+            }
+            return;
+        }
+        libRect = new int[] {ax, ay, aw, ah};
+        int rowH = 24;
+        List<Track> items = s.items();
+        int total = items.size() * rowH + (s.hasMore() || s.loading() ? 14 : 0);
+        double max = Math.max(0, total - ah);
+        libScroll = Math.max(0, Math.min(max, libScroll));
+        g.enableScissor(ax, ay, ax + aw, ay + ah);
+        int first = Math.max(0, (int) (libScroll / rowH)), last = Math.min(items.size() - 1, (int) ((libScroll + ah) / rowH));
+        for (int i = first; i <= last; i++) { // only visible rows: Liked Songs can be thousands long
+            int ry = ay + i * rowH - (int) libScroll;
+            Track t = items.get(i);
+            trackRow(g, mx, my, ax, ry, aw, ay, ah, t, c.kind() == Collection.Kind.ALBUM ? i + 1 : -1,
+                    () -> SpotifyPlayer.INSTANCE.playCollection(c, items, t));
+        }
+        int endY = ay + items.size() * rowH - (int) libScroll;
+        if (s.hasMore() || s.loading()) {
+            g.drawString(font, s.loading() ? "Loading more…" : "", ax + 6, endY + 2, Draw.FAINT, false);
+            if (endY < ay + ah + 60) lib.moreTracks();
         }
         g.disableScissor();
     }
@@ -1060,6 +1286,10 @@ public final class PlayerScreen extends Screen {
         }
         if (settingsRect != null && Draw.in(mx, my, settingsRect[0], settingsRect[1], settingsRect[2], settingsRect[3])) {
             settingsScroll -= sy * 20;
+            return true;
+        }
+        if (libRect != null && Draw.in(mx, my, libRect[0], libRect[1], libRect[2], libRect[3])) {
+            libScroll -= sy * 24;
             return true;
         }
         if (queueRect != null && Draw.in(mx, my, queueRect[0], queueRect[1], queueRect[2], queueRect[3])) {

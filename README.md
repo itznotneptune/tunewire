@@ -14,7 +14,8 @@ A client-side Fabric mod for Minecraft 1.21.11 that puts your Spotify inside the
   - a **Queue** tab listing what plays next;
   - scrolling lyrics;
   - a resizable window: drag the title bar to move it, drag the bottom-right corner to resize it, and use the **fit to screen** button (or double-click the title bar) to fill the screen. Size and position are saved.
-- **Search and queue**: search Spotify, click a result to play it, or press **+Q** to queue it.
+- **Library**: your Liked Songs, playlists and saved albums. Open one to see its songs and play from any of them, or press ▶ to play it all. Spotify only lets this kind of app list the songs of playlists you own or collaborate on; other playlists can still be played as a whole.
+- **Search**: songs, playlists or albums. Click a song to play it or press **+Q** to queue it; click a playlist or album to open it.
 - **Hotkeys** for play/pause, next, previous, volume up/down, opening the player and toggling the HUD. They're unbound by default; set them in Options → Controls → Tunewire.
 
 The music plays in your Spotify app (desktop or phone); Tunewire is the remote control. Spotify doesn't let other apps take its audio stream, so the sound can't come from Minecraft itself. Playback control needs **Spotify Premium**.

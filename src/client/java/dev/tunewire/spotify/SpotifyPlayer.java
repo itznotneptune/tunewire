@@ -145,6 +145,7 @@ public final class SpotifyPlayer {
         devices = List.of();
         queue = List.of();
         queueFor = "";
+        Library.INSTANCE.reset();
         lastTrackUri = "";
         LyricsService.INSTANCE.clear();
         CoverArt.INSTANCE.clear();
@@ -309,6 +310,34 @@ public final class SpotifyPlayer {
         String body = "{\"uris\":[\"" + t.uri().replace("\"", "") + "\"]}";
         act(() -> SpotifyApi.put("/me/player/play", body), true);
         setStatus("Playing " + t.title());
+    }
+
+    /**
+     * Plays a playlist or album as its context (so Spotify carries on through it), starting at {@code start}
+     * when given. Liked Songs has no playable context URI in the Web API, so its loaded tracks are sent as a list.
+     */
+    public void playCollection(dev.tunewire.core.Collection c, List<Track> loaded, Track start) {
+        actionSeq.incrementAndGet();
+        String body;
+        if (c.kind() == dev.tunewire.core.Collection.Kind.LIKED) {
+            if (loaded.isEmpty()) return;
+            int idx = start == null ? 0 : Math.max(0, loaded.indexOf(start));
+            // send a window of up to 100 around the chosen song, Spotify's limit for a URI list
+            int from = Math.max(0, Math.min(idx, loaded.size() - 100)), to = Math.min(loaded.size(), from + 100);
+            StringBuilder uris = new StringBuilder();
+            for (int i = from; i < to; i++) {
+                if (uris.length() > 0) uris.append(',');
+                uris.append('"').append(loaded.get(i).uri().replace("\"", "")).append('"');
+            }
+            body = "{\"uris\":[" + uris + "],\"offset\":{\"position\":" + (idx - from) + "}}";
+        } else {
+            String ctx = "\"context_uri\":\"" + c.uri().replace("\"", "") + "\"";
+            body = start == null ? "{" + ctx + "}"
+                    : "{" + ctx + ",\"offset\":{\"uri\":\"" + start.uri().replace("\"", "") + "\"}}";
+        }
+        String b = body;
+        act(() -> SpotifyApi.put("/me/player/play", b), true);
+        setStatus("Playing " + (start != null ? start.title() : c.name()));
     }
 
     public void queue(Track t) {

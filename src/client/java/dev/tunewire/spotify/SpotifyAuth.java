@@ -35,7 +35,8 @@ public final class SpotifyAuth {
     public static final int PORT = 43827;
     public static final String REDIRECT_URI = "http://127.0.0.1:" + PORT + "/callback";
     public static final String DASHBOARD = "https://developer.spotify.com/dashboard";
-    private static final String SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing";
+    private static final String SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing "
+            + "playlist-read-private playlist-read-collaborative user-library-read";
     private static final String TOKEN_URL = "https://accounts.spotify.com/api/token";
     private static final long LOGIN_TIMEOUT_MS = 5 * 60_000;
 
@@ -180,6 +181,8 @@ public final class SpotifyAuth {
 
     private static void store(TokenStore.Tokens t, JsonObject o) {
         t.accessToken = Json.str(o, "access_token");
+        String scope = Json.str(o, "scope");
+        if (!scope.isEmpty()) t.scope = scope;
         String refresh = Json.str(o, "refresh_token");
         if (!refresh.isEmpty()) t.refreshToken = refresh; // Spotify may or may not rotate it
         t.expiresAt = System.currentTimeMillis() + Json.lng(o, "expires_in", 3600) * 1000;
@@ -230,6 +233,7 @@ public final class SpotifyAuth {
                 TokenStore.Tokens n = new TokenStore.Tokens();
                 n.clientId = clientId;
                 n.refreshToken = refreshToken;
+                n.scope = t.scope;
                 store(n, o);
                 return n.accessToken;
             } catch (Exception e) {
