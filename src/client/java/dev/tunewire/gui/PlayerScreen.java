@@ -1422,6 +1422,12 @@ public final class PlayerScreen extends Screen {
         ry += sp(18);
         g.drawString(font, "CONTROLS", rx, ry, Draw.ACCENT, false);
         ry += sp(14);
+        // off = the tabs layout as before; on = sidebar + bottom playback bar
+        toggle(g, mx, my, rx, ry, rw, "Spotify-style player layout", () -> c.appLayout(), v -> {
+            c.playerLayout = v ? "app" : "tabs";
+            devicesOpen = false;
+        });
+        ry += sp(15);
         stepper(g, mx, my, rx, ry, rw, "Volume key step", c.volumeStep + "%", () -> {
             c.volumeStep = Math.max(1, c.volumeStep - (c.volumeStep > 5 ? 5 : 1));
             TwConfig.save();
