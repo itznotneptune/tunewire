@@ -1,0 +1,10 @@
+{
+  "key.category.tunewire.main": "Tunewire",
+  "key.tunewire.open": "Open player",
+  "key.tunewire.play_pause": "Play / pause",
+  "key.tunewire.next": "Next track",
+  "key.tunewire.previous": "Previous track",
+  "key.tunewire.volume_up": "Volume up",
+  "key.tunewire.volume_down": "Volume down",
+  "key.tunewire.toggle_hud": "Show / hide HUD"
+}

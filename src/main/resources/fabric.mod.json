@@ -1,0 +1,19 @@
+{
+	"schemaVersion": 1,
+	"id": "tunewire",
+	"version": "${version}",
+	"name": "Tunewire",
+	"description": "Control your Spotify from inside Minecraft: now-playing HUD with cover art, synced lyrics, a player screen, search and queue, and hotkeys. Music plays in your Spotify app; Tunewire is the remote. Not affiliated with Spotify.",
+	"authors": ["ItzNotNeptune"],
+	"license": "All-Rights-Reserved",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["dev.tunewire.TunewireClient"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "${minecraft_dependency}",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}
