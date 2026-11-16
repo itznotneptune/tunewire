@@ -31,6 +31,14 @@ public final class TwConfig {
     public int lyricsOffsetMs = 0;
     public int volumeStep = 10;
 
+    /** Player window size in GUI pixels (0 = default) and top-left (-1 = centred). */
+    public int playerW = 0;
+    public int playerH = 0;
+    public int playerX = -1;
+    public int playerY = -1;
+    /** Player window fills the screen; the custom size is kept for when this is turned off. */
+    public boolean playerFit = false;
+
     public HudPos nowPlayingPos = new HudPos(6, 6, 1f);
     /** x is the horizontal centre of the lyrics; negative means "centre of the screen". */
     public HudPos lyricsPos = new HudPos(-1, -1, 1f);
@@ -71,6 +79,8 @@ public final class TwConfig {
         lyricsLines = lyricsLines <= 1 ? 1 : 3;
         lyricsOffsetMs = Math.max(-5000, Math.min(5000, lyricsOffsetMs));
         volumeStep = Math.max(1, Math.min(25, volumeStep));
+        playerW = Math.max(0, playerW);
+        playerH = Math.max(0, playerH);
     }
 
     public static final class HudPos {

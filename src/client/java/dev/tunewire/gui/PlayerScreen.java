@@ -45,7 +45,10 @@ public final class PlayerScreen extends Screen {
 
     private record Hit(int x, int y, int w, int h, Runnable action) {}
 
-    private enum Drag { NONE, SEEK, VOLUME }
+    private enum Drag { NONE, SEEK, VOLUME, MOVE, RESIZE }
+
+    private static final int DEFAULT_W = 480, DEFAULT_H = 280, MIN_W = 380, MIN_H = 236, MARGIN = 4, GRIP = 10;
+    private double grabX, grabY;
 
     private static Tab lastTab = Tab.PLAYER;
     private static String searchText = "";
@@ -93,12 +96,53 @@ public final class PlayerScreen extends Screen {
 
     // ------------------------------------------------------------------ setup
 
+    /** Window bounds from the saved size/position, clamped to the current screen. */
+    private void layoutWindow() {
+        TwConfig c = TwConfig.get();
+        int maxW = Math.max(MIN_W, width - 2 * MARGIN), maxH = Math.max(MIN_H, height - 2 * MARGIN);
+        if (c.playerFit) {
+            pw = Math.min(maxW, width);
+            ph = Math.min(maxH, height);
+            px = (width - pw) / 2;
+            py = (height - ph) / 2;
+            return;
+        }
+        pw = clamp(c.playerW > 0 ? c.playerW : DEFAULT_W, Math.min(MIN_W, width), Math.min(maxW, width));
+        ph = clamp(c.playerH > 0 ? c.playerH : DEFAULT_H, Math.min(MIN_H, height), Math.min(maxH, height));
+        px = c.playerX < 0 ? (width - pw) / 2 : clamp(c.playerX, 0, Math.max(0, width - pw));
+        py = c.playerY < 0 ? (height - ph) / 2 : clamp(c.playerY, 0, Math.max(0, height - ph));
+    }
+
+    private static int clamp(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    /** Keeps the text boxes attached to the window while it moves or resizes. */
+    private void positionWidgets() {
+        int x = px + 10, y = py + HEADER;
+        if (searchBox != null) {
+            searchBox.setX(x + 6);
+            searchBox.setY(y + 13);
+            searchBox.setWidth(pw - 32);
+        }
+        if (clientIdBox != null) {
+            clientIdBox.setX(x + 5);
+            clientIdBox.setY(y + 44);
+            clientIdBox.setWidth(settingsLeftW() - 70);
+        }
+    }
+
+    private void toggleFit() {
+        TwConfig c = TwConfig.get();
+        c.playerFit = !c.playerFit;
+        TwConfig.save();
+        layoutWindow();
+        positionWidgets();
+    }
+
     @Override
     protected void init() {
-        pw = Math.min(480, width - 16);
-        ph = Math.min(280, height - 16);
-        px = (width - pw) / 2;
-        py = (height - ph) / 2;
+        layoutWindow();
         searchBox = null;
         clientIdBox = null;
         int x = px + 10, y = py + HEADER;
@@ -124,6 +168,12 @@ public final class PlayerScreen extends Screen {
             clientIdBox.setResponder(s -> clientIdText = s);
             addWidget(clientIdBox);
         }
+    }
+
+    private double rowScale = 1.0;
+
+    private int sp(int n) {
+        return (int) Math.round(n * rowScale);
     }
 
     private int settingsLeftW() {
@@ -220,6 +270,8 @@ public final class PlayerScreen extends Screen {
         hits.clear();
         popupHits.clear();
         seekRect = volRect = lyricsRect = resultsRect = popupRect = null;
+        layoutWindow(); // move/resize drags write the config, so this follows them too
+        positionWidgets();
         int hmx = devicesOpen ? -1 : mx, hmy = devicesOpen ? -1 : my;
 
         Draw.panel(g, px, py, px + pw, py + ph, Draw.PANEL, Draw.BORDER);
@@ -244,6 +296,27 @@ public final class PlayerScreen extends Screen {
             tx -= 2;
         }
 
+        // fit-to-screen / restore button, left of the tabs
+        boolean fit = TwConfig.get().playerFit;
+        int fbx = tx - 20;
+        boolean fh = Draw.in(hmx, hmy, fbx, py + 5, 16, 16);
+        if (fh) Draw.round(g, fbx, py + 5, fbx + 16, py + 21, 0xFF262836);
+        int ic = fh ? Draw.TEXT : Draw.MUTED;
+        if (fit) { // restore: two overlapping windows
+            Draw.outline(g, fbx + 6, py + 8, 7, 7, ic);
+            g.fill(fbx + 3, py + 11, fbx + 10, py + 18, fh ? 0xFF262836 : Draw.PANEL);
+            Draw.outline(g, fbx + 3, py + 11, 7, 7, ic);
+        } else { // fit: one window with a thick title edge
+            Draw.outline(g, fbx + 3, py + 8, 10, 10, ic);
+            g.fill(fbx + 3, py + 9, fbx + 13, py + 10, ic);
+        }
+        hit(fbx, py + 5, 16, 16, this::toggleFit);
+        if (fh) {
+            String tip = fit ? "Restore window size" : "Fit to screen";
+            int tw = font.width(tip);
+            g.drawString(font, tip, Math.max(px + 4, fbx + 8 - tw / 2), py + HEADER + 3, Draw.MUTED, true);
+        }
+
         int cx = px + 1, cy = py + HEADER, cw = pw - 2, ch = ph - HEADER - FOOTER;
         switch (tab) {
             case PLAYER -> renderPlayer(g, hmx, hmy, cx, cy, cw, ch);
@@ -258,7 +331,19 @@ public final class PlayerScreen extends Screen {
                 : tab == Tab.PLAYER ? "Space play/pause  •  ←/→ seek 10s  •  ↑/↓ volume  •  Esc close"
                 : tab == Tab.SEARCH ? "Enter to search  •  click a song to play it, or + to queue it" : "Esc close";
         int fc = isNote ? Draw.ACCENT : !st.isEmpty() ? Draw.BAD : Draw.FAINT;
-        g.drawString(font, Draw.ellipsize(font, footer, pw - 20), px + 10, py + ph - 11, fc, false);
+        g.drawString(font, Draw.ellipsize(font, footer, pw - 34), px + 10, py + ph - 11, fc, false);
+
+        // resize grip, bottom-right
+        if (!TwConfig.get().playerFit) {
+            boolean gh = drag == Drag.RESIZE || Draw.in(hmx, hmy, px + pw - GRIP, py + ph - GRIP, GRIP, GRIP);
+            int gc = gh ? Draw.ACCENT : Draw.FAINT;
+            int gx = px + pw - 4, gy = py + ph - 4;
+            for (int a = 0; a < 3; a++) {
+                for (int b = 0; a + b < 3; b++) {
+                    g.fill(gx - a * 3, gy - b * 3, gx - a * 3 + 1, gy - b * 3 + 1, gc); // triangle of dots in the corner
+                }
+            }
+        }
 
         if (devicesOpen) renderDevices(g, mx, my);
     }
@@ -273,7 +358,9 @@ public final class PlayerScreen extends Screen {
             return;
         }
         PlaybackState s = sp.state();
-        int leftW = Math.min(232, w / 2 + 6);
+        // left column and cover grow with the window; the controls below the cover need ~94 px
+        int leftW = clamp(w * 9 / 20, 232, 380);
+        int cover = clamp(Math.min(h - 104, leftW - 136), 96, CoverArt.LARGE);
         int lx = x + 10, ly = y + 8;
         if (s == null || s.track() == null) {
             g.drawString(font, sp.everPolled() ? "Nothing is playing on Spotify." : "Talking to Spotify…", lx, ly + 4, Draw.TEXT, false);
@@ -291,7 +378,6 @@ public final class PlayerScreen extends Screen {
         }
 
         Track t = s.track();
-        int cover = 96;
         Identifier id = CoverArt.INSTANCE.large();
         if (id != null) Draw.texture(g, id, lx, ly, cover, CoverArt.LARGE);
         else Draw.noCover(g, font, lx, ly, cover);
@@ -664,29 +750,30 @@ public final class PlayerScreen extends Screen {
         int rx = x + settingsLeftW() + 4, rw = w - settingsLeftW() - 16;
         g.fill(rx - 8, y + 8, rx - 7, y + h - 8, Draw.BORDER);
         int ry = y + 10;
+        rowScale = Math.min(1.0, (h - 26) / 211.0); // squeeze rows to fit short windows
         g.drawString(font, "HUD", rx, ry, Draw.ACCENT, false);
-        ry += 14;
+        ry += sp(14);
         toggle(g, mx, my, rx, ry, rw, "Now playing card", () -> c.nowPlayingHud, v -> c.nowPlayingHud = v);
-        ry += 15;
+        ry += sp(15);
         toggle(g, mx, my, rx, ry, rw, "Cover art on the card", () -> c.hudCoverArt, v -> c.hudCoverArt = v);
-        ry += 15;
+        ry += sp(15);
         toggle(g, mx, my, rx, ry, rw, "Hide HUD while paused", () -> c.hideHudWhenPaused, v -> c.hideHudWhenPaused = v);
-        ry += 15;
+        ry += sp(15);
         button(g, mx, my, rx, ry, rw, 16, "Edit HUD layout", false, () -> minecraft.setScreen(new HudEditorScreen(this)));
-        ry += 24;
+        ry += sp(24);
         g.drawString(font, "LYRICS", rx, ry, Draw.ACCENT, false);
-        ry += 14;
+        ry += sp(14);
         toggle(g, mx, my, rx, ry, rw, "Lyrics on the HUD", () -> c.lyricsHud, v -> c.lyricsHud = v);
-        ry += 15;
+        ry += sp(15);
         toggle(g, mx, my, rx, ry, rw, "Show lines before and after", () -> c.lyricsLines == 3, v -> c.lyricsLines = v ? 3 : 1);
-        ry += 15;
+        ry += sp(15);
         toggle(g, mx, my, rx, ry, rw, "Shade behind current line", () -> c.lyricsBackground, v -> c.lyricsBackground = v);
-        ry += 16;
+        ry += sp(16);
         stepper(g, mx, my, rx, ry, rw, "Lyrics offset", String.format("%+.2fs", c.lyricsOffsetMs / 1000.0),
                 () -> shiftOffset(-250), () -> shiftOffset(250));
-        ry += 18;
+        ry += sp(18);
         g.drawString(font, "CONTROLS", rx, ry, Draw.ACCENT, false);
-        ry += 14;
+        ry += sp(14);
         stepper(g, mx, my, rx, ry, rw, "Volume key step", c.volumeStep + "%", () -> {
             c.volumeStep = Math.max(1, c.volumeStep - (c.volumeStep > 5 ? 5 : 1));
             TwConfig.save();
@@ -694,7 +781,7 @@ public final class PlayerScreen extends Screen {
             c.volumeStep = Math.min(25, c.volumeStep + (c.volumeStep >= 5 ? 5 : 1));
             TwConfig.save();
         });
-        ry += 16;
+        ry += sp(16);
         if (ry < y + h - 10) {
             g.drawString(font, Draw.ellipsize(font, "Hotkeys: Options → Controls → Tunewire", rw), rx, ry, Draw.FAINT, false);
         }
@@ -743,6 +830,15 @@ public final class PlayerScreen extends Screen {
             setFocused(null);
         }
         if (e.button() != 0) return false;
+        TwConfig cfg = TwConfig.get();
+        if (!cfg.playerFit && Draw.in(mx, my, px + pw - GRIP, py + ph - GRIP, GRIP, GRIP)) {
+            drag = Drag.RESIZE;
+            cfg.playerX = px; // anchor the top-left so the window grows toward the cursor
+            cfg.playerY = py;
+            grabX = mx - pw;
+            grabY = my - ph;
+            return true;
+        }
         if (seekRect != null && Draw.in(mx, my, seekRect[0], seekRect[1], seekRect[2], seekRect[3])) {
             drag = Drag.SEEK;
             dragFrac = frac(mx, seekRect);
@@ -761,6 +857,18 @@ public final class PlayerScreen extends Screen {
                 return true;
             }
         }
+        if (Draw.in(mx, my, px, py, pw, HEADER)) {
+            if (dbl) {
+                toggleFit(); // double-click the title bar, like a desktop window
+                return true;
+            }
+            if (!cfg.playerFit) {
+                drag = Drag.MOVE;
+                grabX = mx - px;
+                grabY = my - py;
+            }
+            return true;
+        }
         return false;
     }
 
@@ -770,6 +878,17 @@ public final class PlayerScreen extends Screen {
 
     @Override
     public boolean mouseDragged(MouseButtonEvent e, double dx, double dy) {
+        TwConfig cfg = TwConfig.get();
+        if (drag == Drag.MOVE) {
+            cfg.playerX = clamp((int) (e.x() - grabX), 0, Math.max(0, width - pw));
+            cfg.playerY = clamp((int) (e.y() - grabY), 0, Math.max(0, height - ph));
+            return true;
+        }
+        if (drag == Drag.RESIZE) {
+            cfg.playerW = clamp((int) (e.x() - grabX), MIN_W, Math.max(MIN_W, width - px));
+            cfg.playerH = clamp((int) (e.y() - grabY), MIN_H, Math.max(MIN_H, height - py));
+            return true;
+        }
         if (drag == Drag.SEEK && seekRect != null) {
             dragFrac = frac(e.x(), seekRect);
             return true;
@@ -788,6 +907,7 @@ public final class PlayerScreen extends Screen {
             Track t = SpotifyPlayer.INSTANCE.track();
             if (t != null && t.durationMs() > 0) SpotifyPlayer.INSTANCE.seek((long) (dragFrac * t.durationMs()));
         }
+        if (drag == Drag.MOVE || drag == Drag.RESIZE) TwConfig.save();
         drag = Drag.NONE;
         return super.mouseReleased(e);
     }

@@ -9,7 +9,8 @@ A client-side Fabric mod for Minecraft 1.21.11 that puts your Spotify inside the
 - **Player screen**:
   - seek bar, play/pause, next/previous, shuffle, repeat and volume;
   - a device picker;
-  - scrolling lyrics.
+  - scrolling lyrics;
+  - a resizable window: drag the title bar to move it, drag the bottom-right corner to resize it, and use the **fit to screen** button (or double-click the title bar) to fill the screen. Size and position are saved.
 - **Search and queue**: search Spotify, click a result to play it, or press **+Q** to queue it.
 - **Hotkeys** for play/pause, next, previous, volume up/down, opening the player and toggling the HUD. They're unbound by default; set them in Options → Controls → Tunewire.
 
