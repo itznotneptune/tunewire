@@ -20,6 +20,14 @@ public final class SpotifyApi {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
+    /** Background threads that start requests, so nothing network-related runs on the game thread. */
+    public static final java.util.concurrent.ExecutorService IO = java.util.concurrent.Executors.newFixedThreadPool(2, r -> {
+        Thread t = new Thread(r, "Tunewire IO");
+        t.setDaemon(true);
+        t.setPriority(Thread.NORM_PRIORITY - 1);
+        return t;
+    });
+
     /** Local clock before which nothing is sent, set from a 429's Retry-After. */
     private static volatile long backoffUntil;
 
@@ -78,8 +86,10 @@ public final class SpotifyApi {
         if (backingOff()) {
             return CompletableFuture.failedFuture(new IllegalStateException("Rate limited by Spotify, retrying shortly"));
         }
-        return SpotifyAuth.accessToken(false)
-                .thenCompose(token -> send(method, path, json, token))
+        // hop off the caller (usually the render thread) first: HttpClient does connection/DNS setup synchronously
+        return CompletableFuture.supplyAsync(() -> null, IO)
+                .thenCompose(v -> SpotifyAuth.accessToken(false))
+                .thenComposeAsync(token -> send(method, path, json, token), IO)
                 .thenCompose(r -> {
                     if (r.status() != 401) return CompletableFuture.completedFuture(r);
                     return SpotifyAuth.accessToken(true).thenCompose(token -> send(method, path, json, token));
@@ -98,6 +108,7 @@ public final class SpotifyApi {
             // noBody() makes HttpClient send "Content-Length: 0", which Spotify wants on body-less PUT/POST
             b.method(method, HttpRequest.BodyPublishers.noBody());
         }
+        dev.tunewire.Perf.request();
         return HTTP.sendAsync(b.build(), HttpResponse.BodyHandlers.ofString()).thenApply(res -> {
             if (res.statusCode() == 429) {
                 long secs = res.headers().firstValueAsLong("Retry-After").orElse(5);

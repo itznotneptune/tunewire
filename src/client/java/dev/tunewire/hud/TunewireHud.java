@@ -1,16 +1,15 @@
 package dev.tunewire.hud;
 
+import dev.tunewire.Perf;
 import dev.tunewire.art.CoverArt;
 import dev.tunewire.config.TokenStore;
 import dev.tunewire.config.TwConfig;
 import dev.tunewire.config.TwConfig.HudPos;
-import dev.tunewire.core.Lrc;
 import dev.tunewire.core.PlaybackState;
 import dev.tunewire.core.Track;
 import dev.tunewire.gui.Draw;
 import dev.tunewire.gui.HudEditorScreen;
 import dev.tunewire.gui.PlayerScreen;
-import dev.tunewire.lyrics.LyricsService;
 import dev.tunewire.spotify.SpotifyPlayer;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -25,12 +24,28 @@ public final class TunewireHud {
     public static final int NP_W = 168;
     public static final int NP_H = 42;
     private static final int COVER = 32;
-    /** Fixed width the lyrics element reserves, so dragging it in the editor doesn't jump with line length. */
-    public static final int LYRICS_W = 260;
+    /** "Next up" replaces the artist line this long before the song ends. */
+    public static final long NEXT_UP_MS = 20_000;
+    /** Width lyric lines wrap at; the element keeps this width so dragging it doesn't jump. */
+    public static final int LYRICS_W = 280;
+    private static final int LINE_H = 11;
+
+    public static final LyricsFlow FLOW = new LyricsFlow(LYRICS_W - 8, LINE_H);
 
     private TunewireHud() {}
 
     public static void render(GuiGraphics g, DeltaTracker delta) {
+        Perf.frame();
+        long t0 = Perf.start();
+        try {
+            renderInner(g);
+        } finally {
+            Perf.end(Perf.Section.HUD, t0);
+        }
+        Perf.draw(g);
+    }
+
+    private static void renderInner(GuiGraphics g) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.options.hideGui || mc.player == null) return;
         if (mc.screen instanceof PlayerScreen || mc.screen instanceof HudEditorScreen) return;
@@ -40,7 +55,9 @@ public final class TunewireHud {
         if (s == null || s.track() == null) return;
         if (c.hideHudWhenPaused && !s.playing()) return;
         if (c.nowPlayingHud) drawNowPlaying(g, mc.font, c.nowPlayingPos, s, SpotifyPlayer.INSTANCE.position());
-        if (c.lyricsHud && s.playing()) drawLyrics(g, mc.font, g.guiWidth(), g.guiHeight(), lyricLines(false), false);
+        if (c.lyricsHud && !c.lyricsInWorld && s.playing()) {
+            drawLyrics(g, mc.font, g.guiWidth(), g.guiHeight(), false);
+        }
     }
 
     // ------------------------------------------------------------------ now playing
@@ -62,13 +79,23 @@ public final class TunewireHud {
             tx = 5 + COVER + 6;
         }
         int textW = NP_W - tx - 6;
-        String title = t.title();
         int titleW = textW - (s.playing() ? 0 : 10);
-        g.drawString(font, Draw.marquee(font, title, titleW, now), tx, 6, Draw.TEXT, true);
+        g.drawString(font, Draw.marquee(font, t.title(), titleW, now), tx, 6, Draw.TEXT, true);
         if (!s.playing()) Draw.pause(g, NP_W - 10, 9, 6, Draw.MUTED);
-        g.drawString(font, Draw.marquee(font, t.artistLine(), textW, now + 700), tx, 17, Draw.MUTED, false);
 
         long dur = t.durationMs();
+        long left = dur - positionMs;
+        Track next = SpotifyPlayer.INSTANCE.nextUp();
+        if (next != null && dur > 0 && left >= 0 && left <= NEXT_UP_MS) {
+            String label = "Next up: ";
+            int lw = font.width(label);
+            g.drawString(font, label, tx, 17, Draw.ACCENT, false);
+            String what = next.title() + (next.artistLine().isEmpty() ? "" : " – " + next.artistLine());
+            g.drawString(font, Draw.marquee(font, what, textW - lw, now), tx + lw, 17, Draw.TEXT, false);
+        } else {
+            g.drawString(font, Draw.marquee(font, t.artistLine(), textW, now + 700), tx, 17, Draw.MUTED, false);
+        }
+
         double frac = dur > 0 ? positionMs / (double) dur : 0;
         Draw.bar(g, tx, 30, textW, 3, frac, s.playing() ? Draw.ACCENT : Draw.MUTED);
         g.pose().popMatrix();
@@ -76,72 +103,39 @@ public final class TunewireHud {
 
     // ------------------------------------------------------------------ lyrics
 
-    /** A line to draw: text, and whether it is the line being sung. */
-    public record LyricLine(String text, boolean current) {}
-
-    /** The lines for the lyrics element; {@code preview} gives sample lines for the HUD editor. */
-    public static List<LyricLine> lyricLines(boolean preview) {
-        TwConfig c = TwConfig.get();
-        LyricsService.Lyrics ly = LyricsService.INSTANCE.current();
-        if (ly.status() != LyricsService.Status.SYNCED) {
-            if (!preview) return List.of();
-            return c.lyricsLines == 1 ? List.of(new LyricLine("Lyrics appear here, in time with the song", true))
-                    : List.of(new LyricLine("The line before", false),
-                            new LyricLine("Lyrics appear here, in time with the song", true),
-                            new LyricLine("The line after", false));
-        }
-        Lrc lrc = ly.lrc();
-        long pos = SpotifyPlayer.INSTANCE.position() + c.lyricsOffsetMs;
-        int i = lrc.indexAt(pos);
-        List<Lrc.Line> all = lrc.lines();
-        if (c.lyricsLines == 1) {
-            return i < 0 ? List.of() : List.of(new LyricLine(text(all.get(i)), true));
-        }
-        String prev = i - 1 >= 0 ? text(all.get(i - 1)) : "";
-        String cur = i >= 0 ? text(all.get(i)) : "";
-        String next = i + 1 < all.size() ? text(all.get(i + 1)) : "";
-        if (i < 0 && !all.isEmpty()) next = text(all.get(0)); // intro: show what's coming
-        return List.of(new LyricLine(prev, false), new LyricLine(cur, true), new LyricLine(next, false));
-    }
-
-    private static String text(Lrc.Line l) {
-        return l.text().isEmpty() ? "♪" : l.text();
-    }
-
-    /** Resolved top-left of the lyrics element at the current GUI size. */
-    public static int[] lyricsOrigin(int screenW, int screenH) {
+    /** {x, y, w, h} of the lyrics element at the current GUI size. Fixed per setting, so it never jitters. */
+    public static int[] lyricsBounds(int screenW, int screenH) {
         HudPos p = TwConfig.get().lyricsPos;
-        int[] size = lyricsSize();
-        int w = Math.round(size[0] * p.scale), h = Math.round(size[1] * p.scale);
+        int w = Math.round(LYRICS_W * p.scale), h = Math.round(FLOW.nominalHeight() * p.scale);
         int cx = p.x < 0 ? screenW / 2 : p.x;
-        int y = p.y < 0 ? screenH - 64 - h : p.y;
+        int y = p.y < 0 ? screenH - 60 - h : p.y; // default: just above the hotbar
         return new int[] {cx - w / 2, y, w, h};
     }
 
-    public static int[] lyricsSize() {
-        int lines = TwConfig.get().lyricsLines;
-        return new int[] {LYRICS_W, lines * 11 + 6};
-    }
-
-    public static void drawLyrics(GuiGraphics g, Font font, int screenW, int screenH, List<LyricLine> lines, boolean forceBox) {
-        if (lines.isEmpty() && !forceBox) return;
+    /**
+     * Draws the smoothly scrolling lyrics. {@code preview} (HUD editor) shows sample lines when the song
+     * has no synced lyrics, so the element can still be placed.
+     */
+    public static void drawLyrics(GuiGraphics g, Font font, int screenW, int screenH, boolean preview) {
+        List<LyricsFlow.DrawRow> rows = FLOW.rows(font, preview);
+        if (rows.isEmpty()) return;
         TwConfig c = TwConfig.get();
-        int[] o = lyricsOrigin(screenW, screenH);
+        int[] b = lyricsBounds(screenW, screenH);
         HudPos p = c.lyricsPos;
-        int[] size = lyricsSize();
         g.pose().pushMatrix();
-        g.pose().translate(o[0], o[1]);
+        g.pose().translate(b[0], b[1]);
         g.pose().scale(p.scale, p.scale);
-        int y = 3;
-        for (LyricLine l : lines) {
-            if (!l.text().isEmpty()) {
-                String s = Draw.ellipsize(font, l.text(), size[0] - 8);
-                int w = font.width(s);
-                int x = (size[0] - w) / 2;
-                if (c.lyricsBackground && l.current()) Draw.round(g, x - 4, y - 2, x + w + 4, y + 10, 0x90000000);
-                g.drawString(font, s, x, y, l.current() ? Draw.TEXT : 0xFFB8B8C0, l.current());
+        float centerY = FLOW.nominalHeight() / 2f;
+        for (LyricsFlow.DrawRow r : rows) {
+            int y = Math.round(centerY + r.y());
+            int w = Math.round(r.width());
+            if (w <= 0) continue;
+            int x = (LYRICS_W - w) / 2;
+            if (c.lyricsBackground && r.current() && r.emphasis() > 0.05f) {
+                g.fill(x - 4, y - 1, x + w + 4, y + 10, LyricsFlow.withAlpha(0x000000, 0.56f * r.emphasis() * r.alpha()));
             }
-            y += 11;
+            int rgb = LyricsFlow.mix(0xB8B8C0, 0xFFFFFF, r.emphasis());
+            g.drawString(font, r.text(), x, y, LyricsFlow.withAlpha(rgb, r.alpha()), r.emphasis() > 0.5f);
         }
         g.pose().popMatrix();
     }

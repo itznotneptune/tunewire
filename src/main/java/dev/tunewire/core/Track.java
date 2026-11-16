@@ -63,6 +63,19 @@ public record Track(String id, String uri, String title, List<String> artists, S
         return best;
     }
 
+    /** {@code queue} of a /v1/me/player/queue response: what plays after the current item, in order. */
+    public static List<Track> parseQueue(JsonObject root) {
+        List<Track> out = new ArrayList<>();
+        JsonArray items = Json.arr(root, "queue");
+        if (items == null) return out;
+        for (JsonElement e : items) {
+            if (!e.isJsonObject()) continue;
+            Track t = parse(e.getAsJsonObject());
+            if (t != null) out.add(t);
+        }
+        return out;
+    }
+
     /** {@code tracks.items} of a /v1/search response. */
     public static List<Track> parseSearch(JsonObject root) {
         List<Track> out = new ArrayList<>();

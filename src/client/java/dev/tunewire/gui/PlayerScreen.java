@@ -34,7 +34,7 @@ import java.util.function.Consumer;
  */
 public final class PlayerScreen extends Screen {
     private enum Tab {
-        PLAYER("Now Playing"), SEARCH("Search"), SETTINGS("Settings");
+        PLAYER("Now Playing"), QUEUE("Queue"), SEARCH("Search"), SETTINGS("Settings");
 
         final String label;
 
@@ -170,7 +170,18 @@ public final class PlayerScreen extends Screen {
         }
     }
 
+    private record PanelRow(FormattedCharSequence text, int lineIdx, int y, int width) {}
+
+    private String panelKey = "";
+    private List<PanelRow> panelRows = List.of();
+    private int panelTotal;
+    private long lastPanelNanos;
+
     private double rowScale = 1.0;
+    private double settingsScroll;
+    private int[] settingsRect;
+    private double queueScroll;
+    private int[] queueRect;
 
     private int sp(int n) {
         return (int) Math.round(n * rowScale);
@@ -267,9 +278,18 @@ public final class PlayerScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mx, int my, float delta) {
+        long t0 = dev.tunewire.Perf.start();
+        try {
+            renderInner(g, mx, my, delta);
+        } finally {
+            dev.tunewire.Perf.end(dev.tunewire.Perf.Section.SCREEN, t0);
+        }
+    }
+
+    private void renderInner(GuiGraphics g, int mx, int my, float delta) {
         hits.clear();
         popupHits.clear();
-        seekRect = volRect = lyricsRect = resultsRect = popupRect = null;
+        seekRect = volRect = lyricsRect = resultsRect = popupRect = settingsRect = queueRect = null;
         layoutWindow(); // move/resize drags write the config, so this follows them too
         positionWidgets();
         int hmx = devicesOpen ? -1 : mx, hmy = devicesOpen ? -1 : my;
@@ -320,6 +340,7 @@ public final class PlayerScreen extends Screen {
         int cx = px + 1, cy = py + HEADER, cw = pw - 2, ch = ph - HEADER - FOOTER;
         switch (tab) {
             case PLAYER -> renderPlayer(g, hmx, hmy, cx, cy, cw, ch);
+            case QUEUE -> renderQueue(g, hmx, hmy, cx, cy, cw, ch);
             case SEARCH -> renderSearch(g, hmx, hmy, mx, my, delta, cx, cy, cw, ch);
             case SETTINGS -> renderSettings(g, hmx, hmy, mx, my, delta, cx, cy, cw, ch);
         }
@@ -329,6 +350,7 @@ public final class PlayerScreen extends Screen {
         boolean isNote = System.currentTimeMillis() - noteAt < 4000 && !note.isEmpty();
         String footer = isNote ? note : !st.isEmpty() ? st
                 : tab == Tab.PLAYER ? "Space play/pause  •  ←/→ seek 10s  •  ↑/↓ volume  •  Esc close"
+                : tab == Tab.QUEUE ? "Add songs with +Q in Search  •  includes what Spotify plays next from the album or playlist"
                 : tab == Tab.SEARCH ? "Enter to search  •  click a song to play it, or + to queue it" : "Esc close";
         int fc = isNote ? Draw.ACCENT : !st.isEmpty() ? Draw.BAD : Draw.FAINT;
         g.drawString(font, Draw.ellipsize(font, footer, pw - 34), px + 10, py + ph - 11, fc, false);
@@ -498,44 +520,57 @@ public final class PlayerScreen extends Screen {
         TwConfig c = TwConfig.get();
         long now = System.currentTimeMillis();
 
-        // lay out wrapped rows
-        record Row(FormattedCharSequence text, int lineIdx, int y) {}
-        List<Row> rows = new ArrayList<>();
-        int yy = 0, curTop = -1, curBottom = -1;
+        // wrapped rows, cached per track/version/width: re-wrapping the whole song every frame was the
+        // screen's biggest per-frame cost
         boolean synced = ly.status() == LyricsService.Status.SYNCED;
         List<Lrc.Line> lines = ly.lrc().lines();
-        int current = synced ? ly.lrc().indexAt(SpotifyPlayer.INSTANCE.position() + c.lyricsOffsetMs) : -1;
-        int count = synced ? lines.size() : ly.plain().size();
-        for (int i = 0; i < count; i++) {
-            String text = synced ? lines.get(i).text() : ly.plain().get(i);
-            if (text.isEmpty()) text = synced ? "♪" : " ";
-            if (i == current) curTop = yy;
-            for (FormattedCharSequence part : font.split(Component.literal(text), aw)) {
-                rows.add(new Row(part, i, yy));
-                yy += 10;
+        String layoutKey = ly.trackUri() + "#" + ly.chosen() + "#" + ly.status() + "#" + aw;
+        if (!layoutKey.equals(panelKey)) {
+            panelRows = new ArrayList<>();
+            int yy = 0;
+            int count = synced ? lines.size() : ly.plain().size();
+            for (int i = 0; i < count; i++) {
+                String text = synced ? lines.get(i).text() : ly.plain().get(i);
+                if (text.isEmpty()) text = synced ? "♪" : " ";
+                for (FormattedCharSequence part : font.split(Component.literal(text), aw)) {
+                    panelRows.add(new PanelRow(part, i, yy, font.width(part)));
+                    yy += 10;
+                }
+                yy += synced ? 4 : 1;
             }
-            if (i == current) curBottom = yy;
-            yy += synced ? 4 : 1;
+            panelTotal = yy;
+            panelKey = layoutKey;
         }
-        int total = yy;
+        List<PanelRow> rows = panelRows;
+        int current = synced ? ly.lrc().indexAt(SpotifyPlayer.INSTANCE.position() + c.lyricsOffsetMs) : -1;
+        int curTop = -1, curBottom = -1;
+        for (PanelRow r : rows) {
+            if (r.lineIdx() != current) continue;
+            if (curTop < 0) curTop = r.y();
+            curBottom = r.y() + 10;
+        }
+        int total = panelTotal;
         double max = Math.max(0, total - ah);
         if (synced && now - userScrolledAt > 4000) {
             double target = curTop < 0 ? 0 : (curTop + curBottom) / 2.0 - ah / 2.0;
             target = Math.max(0, Math.min(max, target));
-            lyricScroll = lyricSnap ? target : lyricScroll + (target - lyricScroll) * 0.18;
+            long nanos = System.nanoTime();
+            double dt = lastPanelNanos == 0 ? 0 : Math.min(0.1, (nanos - lastPanelNanos) / 1e9);
+            lyricScroll = lyricSnap ? target : lyricScroll + (target - lyricScroll) * (1 - Math.exp(-dt * 10)); // frame-rate independent glide
             lyricSnap = false;
         }
+        lastPanelNanos = System.nanoTime();
         lyricScroll = Math.max(0, Math.min(max, lyricScroll));
 
         g.enableScissor(ax, ay, ax + aw, ay + ah);
         int hoverLine = -1;
         if (synced && Draw.in(mx, my, ax, ay, aw, ah)) {
-            for (Row r : rows) {
+            for (PanelRow r : rows) {
                 int ry = ay + r.y() - (int) lyricScroll;
                 if (my >= ry - 2 && my < ry + 12) hoverLine = r.lineIdx();
             }
         }
-        for (Row r : rows) {
+        for (PanelRow r : rows) {
             int ry = ay + r.y() - (int) lyricScroll;
             if (ry + 10 < ay || ry > ay + ah) continue;
             int color;
@@ -544,7 +579,7 @@ public final class PlayerScreen extends Screen {
             else if (r.lineIdx() == hoverLine) color = Draw.ACCENT;
             else if (r.lineIdx() < current) color = 0xFF6E6E78;
             else color = 0xFF9A9AA6;
-            int tw = font.width(r.text());
+            int tw = r.width();
             int rx = synced ? ax + (aw - tw) / 2 : ax;
             g.drawString(font, r.text(), rx, ry, color, synced && r.lineIdx() == current);
         }
@@ -552,7 +587,7 @@ public final class PlayerScreen extends Screen {
 
         // click a synced line to jump there
         if (synced) {
-            for (Row r : rows) {
+            for (PanelRow r : rows) {
                 int ry = ay + r.y() - (int) lyricScroll;
                 int top = Math.max(ay, ry - 2), bottom = Math.min(ay + ah, ry + 12);
                 if (bottom <= top) continue;
@@ -630,6 +665,69 @@ public final class PlayerScreen extends Screen {
             }));
             yy += 16;
         }
+    }
+
+    // ---------------------------------------------------------------- queue
+
+    private void renderQueue(GuiGraphics g, int mx, int my, int x, int y, int w, int h) {
+        SpotifyPlayer sp = SpotifyPlayer.INSTANCE;
+        if (!TokenStore.hasLogin()) {
+            g.drawCenteredString(font, "Connect Spotify in Settings to see your queue.", x + w / 2, y + h / 2 - 4, Draw.MUTED);
+            return;
+        }
+        sp.wantQueue();
+        int ax = x + 9, aw = w - 18;
+        Track now = sp.track();
+
+        // header row: what's playing now
+        g.drawString(font, "NOW PLAYING", ax, y + 8, Draw.ACCENT, false);
+        button(g, mx, my, ax + aw - 56, y + 4, 56, 14, sp.queueLoading() ? "…" : "Refresh", false, sp::refreshQueue);
+        int ny = y + 20;
+        if (now == null) {
+            g.drawString(font, "Nothing is playing.", ax + 4, ny + 4, Draw.MUTED, false);
+        } else {
+            queueRow(g, ax, ny, aw, now, true, -1);
+        }
+
+        int ly = ny + 30;
+        g.drawString(font, "NEXT UP", ax, ly, Draw.ACCENT, false);
+        int ay = ly + 12, ah = y + h - 4 - ay;
+        List<Track> q = sp.queue();
+        if (q.isEmpty()) {
+            g.drawString(font, sp.queueLoading() ? "Loading the queue…" : "The queue is empty.", ax + 4, ay + 4, Draw.MUTED, false);
+            return;
+        }
+        queueRect = new int[] {ax, ay, aw, ah};
+        int rowH = 26;
+        double max = Math.max(0, q.size() * rowH - ah);
+        queueScroll = Math.max(0, Math.min(max, queueScroll));
+        g.enableScissor(ax, ay, ax + aw, ay + ah);
+        for (int i = 0; i < q.size(); i++) {
+            int ry = ay + i * rowH - (int) queueScroll;
+            if (ry + rowH < ay || ry > ay + ah) continue;
+            queueRow(g, ax, ry, aw, q.get(i), false, i + 1);
+        }
+        g.disableScissor();
+    }
+
+    /** One queue entry: number (or a playing bar), title, artist, length. */
+    private void queueRow(GuiGraphics g, int x, int y, int w, Track t, boolean playing, int number) {
+        Draw.round(g, x, y, x + w, y + 24, playing ? 0xFF1F2A24 : Draw.CARD);
+        int tx = x + 26;
+        if (playing) {
+            for (int b = 0; b < 3; b++) { // little equalizer bars
+                int bh = 3 + (int) (Math.abs(Math.sin(System.currentTimeMillis() / 180.0 + b * 1.7)) * 7);
+                g.fill(x + 8 + b * 4, y + 17 - bh, x + 11 + b * 4, y + 17, Draw.ACCENT);
+            }
+        } else {
+            String n = String.valueOf(number);
+            g.drawString(font, n, x + 14 - font.width(n) / 2, y + 8, Draw.FAINT, false);
+        }
+        String d = PlaybackState.formatTime(t.durationMs());
+        int textW = w - 26 - font.width(d) - 14;
+        g.drawString(font, Draw.ellipsize(font, t.title(), textW), tx, y + 3, playing ? Draw.ACCENT : Draw.TEXT, false);
+        g.drawString(font, Draw.ellipsize(font, t.artistLine(), textW), tx, y + 13, Draw.MUTED, false);
+        g.drawString(font, d, x + w - 6 - font.width(d), y + 8, Draw.FAINT, false);
     }
 
     // ---------------------------------------------------------------- search
@@ -749,8 +847,14 @@ public final class PlayerScreen extends Screen {
         // right column
         int rx = x + settingsLeftW() + 4, rw = w - settingsLeftW() - 16;
         g.fill(rx - 8, y + 8, rx - 7, y + h - 8, Draw.BORDER);
-        int ry = y + 10;
-        rowScale = Math.min(1.0, (h - 26) / 211.0); // squeeze rows to fit short windows
+        // the column scrolls: rows outside it are clipped and their clicks dropped
+        int areaTop = y + 4, areaBottom = y + h - 4;
+        settingsRect = new int[] {rx - 6, areaTop, rw + 12, areaBottom - areaTop};
+        int hitsBefore = hits.size();
+        int ry0 = y + 10 - (int) settingsScroll;
+        int ry = ry0;
+        rowScale = 1.0;
+        g.enableScissor(rx - 6, areaTop, rx + rw + 6, areaBottom);
         g.drawString(font, "HUD", rx, ry, Draw.ACCENT, false);
         ry += sp(14);
         toggle(g, mx, my, rx, ry, rw, "Now playing card", () -> c.nowPlayingHud, v -> c.nowPlayingHud = v);
@@ -768,7 +872,30 @@ public final class PlayerScreen extends Screen {
         toggle(g, mx, my, rx, ry, rw, "Show lines before and after", () -> c.lyricsLines == 3, v -> c.lyricsLines = v ? 3 : 1);
         ry += sp(15);
         toggle(g, mx, my, rx, ry, rw, "Shade behind current line", () -> c.lyricsBackground, v -> c.lyricsBackground = v);
-        ry += sp(16);
+        ry += sp(15);
+        toggle(g, mx, my, rx, ry, rw, "Float lyrics in the world", () -> c.lyricsInWorld, v -> c.lyricsInWorld = v);
+        ry += sp(15);
+        if (c.lyricsInWorld) {
+            stepper(g, mx, my, rx, ry, rw, "  Distance", String.format("%.1f", c.worldDistance), () -> {
+                c.worldDistance = Math.max(1.5f, c.worldDistance - 0.5f);
+                TwConfig.save();
+            }, () -> {
+                c.worldDistance = Math.min(8f, c.worldDistance + 0.5f);
+                TwConfig.save();
+            });
+            ry += sp(16);
+            stepper(g, mx, my, rx, ry, rw, "  Text size", Math.round(c.worldScale * 100) + "%", () -> {
+                c.worldScale = Math.max(0.5f, Math.round((c.worldScale - 0.1f) * 10) / 10f);
+                TwConfig.save();
+            }, () -> {
+                c.worldScale = Math.min(2.5f, Math.round((c.worldScale + 0.1f) * 10) / 10f);
+                TwConfig.save();
+            });
+            ry += sp(16);
+            toggle(g, mx, my, rx, ry, rw, "  Visible through blocks", () -> c.worldThroughWalls, v -> c.worldThroughWalls = v);
+            ry += sp(15);
+        }
+        ry += 1;
         stepper(g, mx, my, rx, ry, rw, "Lyrics offset", String.format("%+.2fs", c.lyricsOffsetMs / 1000.0),
                 () -> shiftOffset(-250), () -> shiftOffset(250));
         ry += sp(18);
@@ -782,8 +909,20 @@ public final class PlayerScreen extends Screen {
             TwConfig.save();
         });
         ry += sp(16);
-        if (ry < y + h - 10) {
-            g.drawString(font, Draw.ellipsize(font, "Hotkeys: Options → Controls → Tunewire", rw), rx, ry, Draw.FAINT, false);
+        g.drawString(font, Draw.ellipsize(font, "Hotkeys: Options → Controls → Tunewire", rw), rx, ry, Draw.FAINT, false);
+        ry += 12;
+        g.disableScissor();
+
+        int total = ry - ry0 + 6;
+        double max = Math.max(0, total - (areaBottom - areaTop));
+        settingsScroll = Math.max(0, Math.min(max, settingsScroll));
+        hits.subList(hitsBefore, hits.size()).removeIf(hh -> hh.y() < areaTop || hh.y() + hh.h() > areaBottom);
+        if (max > 0) { // scrollbar
+            int trackX = rx + rw + 4, ah = areaBottom - areaTop;
+            int thumbH = Math.max(14, (int) (ah * (ah / (double) total)));
+            int thumbY = areaTop + (int) ((ah - thumbH) * (settingsScroll / max));
+            g.fill(trackX, areaTop, trackX + 2, areaBottom, 0xFF22242E);
+            g.fill(trackX, thumbY, trackX + 2, thumbY + thumbH, 0xFF5A5D70);
         }
     }
 
@@ -917,6 +1056,14 @@ public final class PlayerScreen extends Screen {
         if (lyricsRect != null && Draw.in(mx, my, lyricsRect[0], lyricsRect[1], lyricsRect[2], lyricsRect[3])) {
             lyricScroll -= sy * 24;
             userScrolledAt = System.currentTimeMillis();
+            return true;
+        }
+        if (settingsRect != null && Draw.in(mx, my, settingsRect[0], settingsRect[1], settingsRect[2], settingsRect[3])) {
+            settingsScroll -= sy * 20;
+            return true;
+        }
+        if (queueRect != null && Draw.in(mx, my, queueRect[0], queueRect[1], queueRect[2], queueRect[3])) {
+            queueScroll -= sy * 24;
             return true;
         }
         if (resultsRect != null && Draw.in(mx, my, resultsRect[0], resultsRect[1], resultsRect[2], resultsRect[3])) {

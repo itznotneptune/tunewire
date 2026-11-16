@@ -2,13 +2,16 @@
 
 A client-side Fabric mod for Minecraft 1.21.11 that puts your Spotify inside the game:
 
-- **Now-playing HUD**: cover art, title and artist (they scroll if too long), and a progress bar.
+- **Now-playing HUD**: cover art, title and artist (they scroll if too long), and a progress bar. In the last 20 seconds of a song it shows **Next up:** with the following track.
 - **Synced lyrics**: shown on the HUD and in the player, timed to the song. They come from [LRCLIB](https://lrclib.net), because Spotify has no public lyrics API.
+  - Lines glide smoothly from one to the next, and long lines wrap instead of being cut off.
+  - Optionally, the lyrics **float as 3D text in the world** in front of you. You can set the distance, text size and whether they show through blocks.
   - Click a line to jump to it.
   - If the timing is off, switch to another lyric version or nudge the offset.
 - **Player screen**:
   - seek bar, play/pause, next/previous, shuffle, repeat and volume;
   - a device picker;
+  - a **Queue** tab listing what plays next;
   - scrolling lyrics;
   - a resizable window: drag the title bar to move it, drag the bottom-right corner to resize it, and use the **fit to screen** button (or double-click the title bar) to fill the screen. Size and position are saved.
 - **Search and queue**: search Spotify, click a result to play it, or press **+Q** to queue it.
@@ -34,6 +37,7 @@ Since February 2026, Spotify's Development Mode needs the app owner to have Prem
 | `/tunewire login` / `logout` | Connect or disconnect Spotify |
 | `/tunewire clientid <id>` | Set the Client ID |
 | `/tunewire hud` | Drag and resize the HUD elements |
+| `/tunewire perf` | Show how much frame time Tunewire uses (top-right overlay) |
 
 ## Files
 

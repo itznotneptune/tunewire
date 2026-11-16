@@ -40,6 +40,13 @@ public final class SpotifyPlayer {
     private volatile List<Device> devices = List.of();
     private final AtomicInteger actionSeq = new AtomicInteger();
 
+    private volatile List<Track> queue = List.of();
+    /** Track URI the queue was last fetched during, and when; drives refreshes. */
+    private volatile String queueFor = "";
+    private volatile long queueAt;
+    private volatile boolean queueLoading;
+    private volatile boolean queueWanted;
+
     private volatile int pendingVolume = -1;
     private volatile long lastVolumeSent;
 
@@ -82,10 +89,62 @@ public final class SpotifyPlayer {
         if (!(mc.screen instanceof PlayerScreen)) TunewireClient.actionBar(s);
     }
 
+    /** Upcoming items, in play order (Spotify includes autoplay/context tracks, not just manual queue adds). */
+    public List<Track> queue() {
+        return queue;
+    }
+
+    public boolean queueLoading() {
+        return queueLoading;
+    }
+
+    /** The item after the current one, if the queue was fetched during this track. */
+    public Track nextUp() {
+        Track t = track();
+        List<Track> q = queue;
+        return t != null && t.uri().equals(queueFor) && !q.isEmpty() ? q.get(0) : null;
+    }
+
+    /** The Queue tab is visible: keep the list fresh. */
+    public void wantQueue() {
+        queueWanted = true;
+    }
+
+    public void refreshQueue() {
+        if (queueLoading) return;
+        queueLoading = true;
+        Track t = track();
+        String forUri = t == null ? "" : t.uri();
+        SpotifyApi.get("/me/player/queue").whenComplete((r, ex) -> {
+            queueLoading = false;
+            queueAt = System.currentTimeMillis();
+            if (ex != null || r == null || !r.ok()) return; // keep the old list; the tab shows it
+            queue = List.copyOf(Track.parseQueue(r.json()));
+            queueFor = forUri;
+        });
+    }
+
+    private void maybeRefreshQueue(long now) {
+        boolean wanted = queueWanted;
+        queueWanted = false;
+        PlaybackState s = state;
+        if (s == null || s.track() == null || queueLoading || SpotifyApi.backingOff()) return;
+        boolean stale = !s.track().uri().equals(queueFor);
+        if (wanted) {
+            if (stale || now - queueAt > 8000) refreshQueue();
+            return;
+        }
+        // for the HUD's "Next up": fetch once per track as the end approaches
+        long left = s.track().durationMs() - s.positionAt(now);
+        if (stale && s.playing() && left <= 25_000 && now - queueAt > 3000) refreshQueue();
+    }
+
     public void reset() {
         state = null;
         everPolled = false;
         devices = List.of();
+        queue = List.of();
+        queueFor = "";
         lastTrackUri = "";
         LyricsService.INSTANCE.clear();
         CoverArt.INSTANCE.clear();
@@ -103,6 +162,7 @@ public final class SpotifyPlayer {
         flushVolume(now);
         boolean screenOpen = mc.screen instanceof PlayerScreen;
         if (mc.level == null && !screenOpen) return; // HUD is not visible: don't spend requests
+        maybeRefreshQueue(now);
         if (polling || now < nextPollAt || SpotifyApi.backingOff()) return;
         poll(screenOpen);
     }
@@ -254,7 +314,11 @@ public final class SpotifyPlayer {
     public void queue(Track t) {
         act(() -> SpotifyApi.post("/me/player/queue?uri=" + Http.enc(t.uri()), null), true)
                 .thenAccept(ok -> {
-                    if (ok) setStatus("Added to queue: " + t.title());
+                    if (ok) {
+                        setStatus("Added to queue: " + t.title());
+                        queueAt = 0;
+                        queueFor = ""; // refetch so the Queue tab and "Next up" include it
+                    }
                 });
     }
 

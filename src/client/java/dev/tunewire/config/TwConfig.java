@@ -27,6 +27,14 @@ public final class TwConfig {
     /** 1 = current line only, 3 = previous / current / next. */
     public int lyricsLines = 3;
     public boolean lyricsBackground = true;
+    /** Lyrics float as 3D text in the world in front of you instead of on the HUD. */
+    public boolean lyricsInWorld = false;
+    /** Blocks between your eyes and the floating lyrics. */
+    public float worldDistance = 3.5f;
+    /** Size multiplier of the floating lyrics. */
+    public float worldScale = 1.0f;
+    /** Floating lyrics stay visible through blocks in front of them. */
+    public boolean worldThroughWalls = true;
     /** Added to the playback position when picking the lyric line; positive shows lines earlier. */
     public int lyricsOffsetMs = 0;
     public int volumeStep = 10;
@@ -79,6 +87,8 @@ public final class TwConfig {
         lyricsLines = lyricsLines <= 1 ? 1 : 3;
         lyricsOffsetMs = Math.max(-5000, Math.min(5000, lyricsOffsetMs));
         volumeStep = Math.max(1, Math.min(25, volumeStep));
+        worldDistance = Math.max(1.5f, Math.min(8f, worldDistance));
+        worldScale = Math.max(0.5f, Math.min(2.5f, worldScale));
         playerW = Math.max(0, playerW);
         playerH = Math.max(0, playerH);
     }

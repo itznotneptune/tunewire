@@ -27,7 +27,7 @@ public final class TokenStore {
         public long expiresAt;
     }
 
-    private static Tokens tokens = new Tokens();
+    private static volatile Tokens tokens = new Tokens();
 
     private TokenStore() {}
 
@@ -35,8 +35,9 @@ public final class TokenStore {
         return tokens;
     }
 
-    public static synchronized boolean hasLogin() {
-        return tokens.refreshToken != null && !tokens.refreshToken.isEmpty();
+    public static boolean hasLogin() {
+        Tokens t = tokens; // volatile read; called every frame
+        return t.refreshToken != null && !t.refreshToken.isEmpty();
     }
 
     public static synchronized void load() {
@@ -49,8 +50,11 @@ public final class TokenStore {
         }
     }
 
-    public static synchronized void set(Tokens t) {
-        tokens = t;
+    /** Swaps tokens under the lock, writes the file outside it so the render thread never waits on disk. */
+    public static void set(Tokens t) {
+        synchronized (TokenStore.class) {
+            tokens = t;
+        }
         try {
             Files.createDirectories(FILE.getParent());
             try (Writer w = Files.newBufferedWriter(FILE, StandardCharsets.UTF_8)) {

@@ -7,6 +7,8 @@ import dev.tunewire.config.TwConfig;
 import dev.tunewire.gui.HudEditorScreen;
 import dev.tunewire.gui.PlayerScreen;
 import dev.tunewire.hud.TunewireHud;
+import dev.tunewire.hud.WorldLyrics;
+import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents;
 import dev.tunewire.spotify.SpotifyAuth;
 import dev.tunewire.spotify.SpotifyPlayer;
 import net.fabricmc.api.ClientModInitializer;
@@ -65,6 +67,12 @@ public final class TunewireClient implements ClientModInitializer {
                             chat("Disconnected from Spotify.", false);
                             return 1;
                         }))
+                        .then(ClientCommandManager.literal("perf").executes(c -> {
+                            Perf.overlay = !Perf.overlay;
+                            chat(Perf.overlay ? "Performance overlay on (top right). Run /tunewire perf again to hide it."
+                                    : "Performance overlay off.", false);
+                            return 1;
+                        }))
                         .then(ClientCommandManager.literal("hud").executes(c -> {
                             openScreen(new HudEditorScreen(null));
                             return 1;
@@ -81,6 +89,7 @@ public final class TunewireClient implements ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> SpotifyAuth.cancelLogin());
         HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT,
                 Identifier.fromNamespaceAndPath(MOD_ID, "hud"), TunewireHud::render);
+        WorldRenderEvents.AFTER_ENTITIES.register(WorldLyrics::render);
 
         LOG.info("Tunewire loaded");
         System.out.println("[Tunewire] loaded: /tunewire, hotkeys under Options > Controls > Tunewire"); // Lunar only logs stdout
@@ -91,6 +100,15 @@ public final class TunewireClient implements ClientModInitializer {
     }
 
     private static void tick(Minecraft mc) {
+        long t0 = Perf.start();
+        try {
+            tickInner(mc);
+        } finally {
+            Perf.end(Perf.Section.TICK, t0);
+        }
+    }
+
+    private static void tickInner(Minecraft mc) {
         if (pendingScreen != null && mc.screen == null) {
             // opened a tick later so the chat screen that ran the command has closed
             Screen s = pendingScreen;

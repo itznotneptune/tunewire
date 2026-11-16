@@ -34,11 +34,11 @@ public final class HudEditorScreen extends Screen {
 
     private boolean enabled(El e) {
         TwConfig c = TwConfig.get();
-        return e == El.NOW_PLAYING ? c.nowPlayingHud : c.lyricsHud;
+        return e == El.NOW_PLAYING ? c.nowPlayingHud : c.lyricsHud && !c.lyricsInWorld;
     }
 
     private int[] bounds(El e) {
-        if (e == El.LYRICS) return TunewireHud.lyricsOrigin(width, height);
+        if (e == El.LYRICS) return TunewireHud.lyricsBounds(width, height);
         HudPos p = TwConfig.get().nowPlayingPos;
         return new int[] {p.x, p.y, Math.round(TunewireHud.NP_W * p.scale), Math.round(TunewireHud.NP_H * p.scale)};
     }
@@ -65,8 +65,7 @@ public final class HudEditorScreen extends Screen {
                 TunewireHud.drawNowPlaying(g, font, c.nowPlayingPos, real ? s : SAMPLE,
                         real ? SpotifyPlayer.INSTANCE.position() : 80_000);
             } else {
-                List<TunewireHud.LyricLine> lines = TunewireHud.lyricLines(false);
-                TunewireHud.drawLyrics(g, font, width, height, lines.isEmpty() ? TunewireHud.lyricLines(true) : lines, true);
+                TunewireHud.drawLyrics(g, font, width, height, true);
             }
             int[] b = bounds(e);
             boolean hover = dragging == e || Draw.in(mx, my, b[0], b[1], b[2], b[3]);

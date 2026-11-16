@@ -60,6 +60,7 @@ public final class CoverArt {
         if (imageUrl.equals(url)) return;
         url = imageUrl;
         HttpRequest req = HttpRequest.newBuilder(URI.create(imageUrl)).timeout(Duration.ofSeconds(15)).GET().build();
+        dev.tunewire.Perf.request();
         HTTP.sendAsync(req, HttpResponse.BodyHandlers.ofByteArray()).thenAccept(res -> {
             if (res.statusCode() != 200 || !imageUrl.equals(url)) return;
             try {

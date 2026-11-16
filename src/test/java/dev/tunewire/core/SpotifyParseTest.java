@@ -74,6 +74,17 @@ class SpotifyParseTest {
     }
 
     @Test
+    void parsesQueue() {
+        List<Track> q = Track.parseQueue(JsonParser.parseString("""
+                {"currently_playing":{"type":"track","uri":"spotify:track:now","name":"Now"},
+                 "queue":[{"type":"track","uri":"spotify:track:a","name":"A","artists":[{"name":"X"}]},
+                          {"type":"episode","uri":"spotify:episode:b","name":"B","show":{"name":"Pod"}}]}""").getAsJsonObject());
+        assertEquals(List.of("A", "B"), q.stream().map(Track::title).toList());
+        assertEquals("X", q.get(0).artistLine());
+        assertTrue(Track.parseQueue(JsonParser.parseString("{}").getAsJsonObject()).isEmpty());
+    }
+
+    @Test
     void repeatCycleAndTime() {
         assertEquals("context", PlaybackState.nextRepeat("off"));
         assertEquals("track", PlaybackState.nextRepeat("context"));

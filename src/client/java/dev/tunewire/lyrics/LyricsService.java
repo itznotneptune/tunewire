@@ -143,6 +143,7 @@ public final class LyricsService {
                 .timeout(Duration.ofSeconds(12))
                 .header("User-Agent", "Tunewire/" + TunewireClient.version() + " (Minecraft Fabric mod)")
                 .GET().build();
+        dev.tunewire.Perf.request();
         return HTTP.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(r -> {
             if (r.statusCode() == 404) return null;
             if (r.statusCode() != 200) throw new IllegalStateException("LRCLIB HTTP " + r.statusCode());
