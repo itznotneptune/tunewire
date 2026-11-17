@@ -162,6 +162,7 @@ public final class SpotifyPlayer {
         long now = System.currentTimeMillis();
         flushVolume(now);
         boolean screenOpen = mc.screen instanceof PlayerScreen;
+        windowActive = mc.isWindowActive();
         if (mc.level == null && !screenOpen) return; // HUD is not visible: don't spend requests
         maybeRefreshQueue(now);
         if (polling || now < nextPollAt || SpotifyApi.backingOff()) return;
@@ -191,7 +192,10 @@ public final class SpotifyPlayer {
                 apply(null);
             } else if (r.ok()) {
                 apply(PlaybackState.parse(r.json(), now));
-            } else if (r.status() != 429) {
+            } else if (r.status() == 429) {
+                status = SpotifyApi.backoffMessage();
+                statusAt = now;
+            } else {
                 status = r.errorText();
                 statusAt = now;
             }
@@ -200,18 +204,28 @@ public final class SpotifyPlayer {
         });
     }
 
+    /** Whether the game window has focus; an unfocused game polls slowly. */
+    private volatile boolean windowActive = true;
+
+    /**
+     * How long until the next playback poll. Kept well inside Spotify's rate limit (a rolling 30 s window per app):
+     * the position is interpolated locally between polls, so the bar and lyrics stay smooth at these rates.
+     */
     private long interval(boolean screenOpen) {
         PlaybackState s = state;
-        long base = screenOpen ? 1000 : s != null && s.playing() ? 2000 : 5000;
-        if (s != null && s.playing() && s.track() != null && s.track().durationMs() > 0) {
+        boolean playing = s != null && s.playing();
+        long base = screenOpen ? 2000 : playing ? 4000 : 10_000;
+        if (!windowActive) base = Math.max(base, 10_000);
+        if (playing && s.track() != null && s.track().durationMs() > 0) {
             long left = s.track().durationMs() - s.positionAt(System.currentTimeMillis());
-            if (left >= 0 && left < base) return Math.max(250, left + 400); // catch the track change promptly
+            if (left >= 0 && left < base) return Math.max(1000, left + 500); // catch the track change promptly
         }
         return base;
     }
 
     private void apply(PlaybackState s) {
         state = PlaybackState.keepTimeline(state, s);
+        if (s != null) rememberDevice(s.deviceId(), s.deviceName());
         String uri = s == null || s.track() == null ? "" : s.track().uri();
         if (!uri.equals(lastTrackUri)) {
             lastTrackUri = uri;
@@ -224,6 +238,31 @@ public final class SpotifyPlayer {
             LyricsService.INSTANCE.request(t);
             CoverArt.INSTANCE.request(t == null ? "" : t.imageUrl());
         }
+    }
+
+    /** Keeps the device as the commands' target, saved so it survives a restart; only written when it changes. */
+    private static void rememberDevice(String id, String name) {
+        if (id == null || id.isEmpty()) return;
+        dev.tunewire.config.TwConfig c = dev.tunewire.config.TwConfig.get();
+        if (id.equals(c.lastDeviceId) && java.util.Objects.equals(name, c.lastDeviceName)) return;
+        c.lastDeviceId = id;
+        c.lastDeviceName = name == null ? "" : name;
+        dev.tunewire.config.TwConfig.save();
+    }
+
+    /** The remembered device's name, or "" when none is known yet. */
+    public String deviceName() {
+        return dev.tunewire.config.TwConfig.get().lastDeviceName;
+    }
+
+    /**
+     * {@code path} sent to the remembered device ({@code device_id}), so a command reaches it even after Spotify stopped
+     * calling it active, instead of failing with NO_ACTIVE_DEVICE. Unchanged when no device is known yet.
+     */
+    private static String toDevice(String path) {
+        String id = dev.tunewire.config.TwConfig.get().lastDeviceId;
+        if (id == null || id.isEmpty()) return path;
+        return path + (path.contains("?") ? "&" : "?") + "device_id=" + Http.enc(id);
     }
 
     /** Local edit after an action; bumps the sequence so stale in-flight polls are dropped. */
@@ -239,16 +278,16 @@ public final class SpotifyPlayer {
         PlaybackState s = state;
         if (s != null && s.playing()) {
             local(p -> p.withPlaying(false, System.currentTimeMillis()));
-            act(() -> SpotifyApi.put("/me/player/pause", null), true);
+            act(() -> SpotifyApi.put(toDevice("/me/player/pause"), null), true);
         } else {
             local(p -> p.withPlaying(true, System.currentTimeMillis()));
-            act(() -> SpotifyApi.put("/me/player/play", null), true);
+            act(() -> SpotifyApi.put(toDevice("/me/player/play"), null), true);
         }
     }
 
     public void next() {
         actionSeq.incrementAndGet();
-        act(() -> SpotifyApi.post("/me/player/next", null), true);
+        act(() -> SpotifyApi.post(toDevice("/me/player/next"), null), true);
     }
 
     /** Like the Spotify app: restart the track when more than 3 s in, otherwise go back one. */
@@ -258,13 +297,13 @@ public final class SpotifyPlayer {
             return;
         }
         actionSeq.incrementAndGet();
-        act(() -> SpotifyApi.post("/me/player/previous", null), true);
+        act(() -> SpotifyApi.post(toDevice("/me/player/previous"), null), true);
     }
 
     public void seek(long ms) {
         long target = Math.max(0, ms);
         local(p -> p.withProgress(target, System.currentTimeMillis()));
-        act(() -> SpotifyApi.put("/me/player/seek?position_ms=" + target, null), true);
+        act(() -> SpotifyApi.put(toDevice("/me/player/seek?position_ms=" + target), null), true);
     }
 
     public void seekBy(long deltaMs) {
@@ -293,27 +332,27 @@ public final class SpotifyPlayer {
         if (v < 0 || now - lastVolumeSent < 250) return;
         pendingVolume = -1;
         lastVolumeSent = now;
-        act(() -> SpotifyApi.put("/me/player/volume?volume_percent=" + v, null), false);
+        act(() -> SpotifyApi.put(toDevice("/me/player/volume?volume_percent=" + v), null), false);
     }
 
     public void toggleShuffle() {
         PlaybackState s = state;
         boolean on = s == null || !s.shuffle();
         local(p -> p.withShuffle(on));
-        act(() -> SpotifyApi.put("/me/player/shuffle?state=" + on, null), true);
+        act(() -> SpotifyApi.put(toDevice("/me/player/shuffle?state=" + on), null), true);
     }
 
     public void cycleRepeat() {
         PlaybackState s = state;
         String next = PlaybackState.nextRepeat(s == null ? "off" : s.repeat());
         local(p -> p.withRepeat(next));
-        act(() -> SpotifyApi.put("/me/player/repeat?state=" + next, null), true);
+        act(() -> SpotifyApi.put(toDevice("/me/player/repeat?state=" + next), null), true);
     }
 
     public void playTrack(Track t) {
         actionSeq.incrementAndGet();
         String body = "{\"uris\":[\"" + t.uri().replace("\"", "") + "\"]}";
-        act(() -> SpotifyApi.put("/me/player/play", body), true);
+        act(() -> SpotifyApi.put(toDevice("/me/player/play"), body), true);
         setStatus("Playing " + t.title());
     }
 
@@ -341,12 +380,12 @@ public final class SpotifyPlayer {
                     : "{" + ctx + ",\"offset\":{\"uri\":\"" + start.uri().replace("\"", "") + "\"}}";
         }
         String b = body;
-        act(() -> SpotifyApi.put("/me/player/play", b), true);
+        act(() -> SpotifyApi.put(toDevice("/me/player/play"), b), true);
         setStatus("Playing " + (start != null ? start.title() : c.name()));
     }
 
     public void queue(Track t) {
-        act(() -> SpotifyApi.post("/me/player/queue?uri=" + Http.enc(t.uri()), null), true)
+        act(() -> SpotifyApi.post(toDevice("/me/player/queue?uri=" + Http.enc(t.uri())), null), true)
                 .thenAccept(ok -> {
                     if (ok) {
                         setStatus("Added to queue: " + t.title());
@@ -385,33 +424,37 @@ public final class SpotifyPlayer {
         actionSeq.incrementAndGet();
         String body = "{\"device_ids\":[\"" + d.id().replace("\"", "") + "\"],\"play\":true}";
         act(() -> SpotifyApi.put("/me/player", body), false).thenAccept(ok -> {
-            if (ok) setStatus("Playing on " + d.name());
+            if (ok) {
+                rememberDevice(d.id(), d.name());
+                setStatus("Playing on " + d.name());
+            }
         });
     }
 
     /**
-     * Runs an action and reports failures. On NO_ACTIVE_DEVICE it wakes a device (the first computer,
-     * else the first one listed) and retries once. Completes with whether it succeeded.
+     * Runs an action and reports failures. On NO_ACTIVE_DEVICE it wakes a device and retries once: the remembered
+     * device first, directly (one request, no device-list lookup); only if that fails, the device list is read and the
+     * remembered device, else the first computer, else the first device listed, is used. Completes with whether it
+     * succeeded.
      */
     private CompletableFuture<Boolean> act(Supplier<CompletableFuture<SpotifyApi.Response>> call, boolean wakeDevice) {
         return call.get().thenCompose(r -> {
             if (r.ok()) return CompletableFuture.completedFuture(true);
             if (wakeDevice && r.status() == 404 && "NO_ACTIVE_DEVICE".equals(r.errorText())) {
-                return refreshDevices().thenCompose(list -> {
-                    Device pick = list.stream().filter(d -> "Computer".equalsIgnoreCase(d.type())).findFirst()
+                String remembered = dev.tunewire.config.TwConfig.get().lastDeviceId;
+                CompletableFuture<Boolean> woke = remembered.isEmpty() ? CompletableFuture.completedFuture(false)
+                        : wake(remembered);
+                return woke.thenCompose(ok -> ok ? retry(call) : refreshDevices().thenCompose(list -> {
+                    Device pick = list.stream().filter(d -> d.id().equals(remembered)).findFirst()
+                            .or(() -> list.stream().filter(d -> "Computer".equalsIgnoreCase(d.type())).findFirst())
                             .orElse(list.isEmpty() ? null : list.get(0));
                     if (pick == null) {
                         report("No Spotify device found. Open Spotify on this PC or your phone first.");
                         return CompletableFuture.completedFuture(false);
                     }
-                    String body = "{\"device_ids\":[\"" + pick.id().replace("\"", "") + "\"],\"play\":false}";
-                    return SpotifyApi.put("/me/player", body)
-                            .thenCompose(t -> call.get())
-                            .thenApply(again -> {
-                                if (!again.ok()) report(describe(again));
-                                return again.ok();
-                            });
-                });
+                    rememberDevice(pick.id(), pick.name());
+                    return wake(pick.id()).thenCompose(w -> retry(call));
+                }));
             }
             report(describe(r));
             return CompletableFuture.completedFuture(false);
@@ -421,6 +464,20 @@ public final class SpotifyPlayer {
                     : c.getMessage() == null ? c.toString() : c.getMessage());
             return false;
         }).whenComplete((ok, ex) -> pollSoon(350));
+    }
+
+    /** Makes {@code deviceId} the active device without starting playback. Completes with whether Spotify accepted. */
+    private static CompletableFuture<Boolean> wake(String deviceId) {
+        String body = "{\"device_ids\":[\"" + deviceId.replace("\"", "") + "\"],\"play\":false}";
+        return SpotifyApi.put("/me/player", body).thenApply(SpotifyApi.Response::ok).exceptionally(ex -> false);
+    }
+
+    /** Sends the action again after a device was woken, reporting a second failure. */
+    private CompletableFuture<Boolean> retry(Supplier<CompletableFuture<SpotifyApi.Response>> call) {
+        return call.get().thenApply(again -> {
+            if (!again.ok()) report(describe(again));
+            return again.ok();
+        });
     }
 
     private void report(String msg) {

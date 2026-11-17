@@ -63,6 +63,12 @@ public final class TwConfig {
     public boolean playerFit = false;
     /** Player layout: "tabs" (tabs across the top) or "app" (sidebar with your library, bottom playback bar). */
     public String playerLayout = "tabs";
+    /**
+     * The Spotify device last seen playing (or chosen in the device picker). Commands are sent to it, so it stays the
+     * target after Spotify drops it from "active" (paused for a while), instead of failing with "no active device".
+     */
+    public String lastDeviceId = "";
+    public String lastDeviceName = "";
 
     public boolean appLayout() {
         return "app".equals(playerLayout);
@@ -117,6 +123,8 @@ public final class TwConfig {
         }
         lyricsInWorld = lyricsMode.equals("world");
         if (!"app".equals(playerLayout)) playerLayout = "tabs";
+        if (lastDeviceId == null) lastDeviceId = "";
+        if (lastDeviceName == null) lastDeviceName = "";
         playerW = Math.max(0, playerW);
         playerH = Math.max(0, playerH);
     }

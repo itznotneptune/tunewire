@@ -28,8 +28,10 @@ public final class SpotifyApi {
         return t;
     });
 
-    /** Local clock before which nothing is sent, set from a 429's Retry-After. */
+    /** Local clock before which nothing is sent, set from a 429's Retry-After (see {@link dev.tunewire.core.RateLimit}). */
     private static volatile long backoffUntil;
+    /** 429s in a row; any other response resets it. */
+    private static volatile int consecutive429;
 
     public record Response(int status, String body) {
         public boolean ok() {
@@ -69,6 +71,17 @@ public final class SpotifyApi {
         return System.currentTimeMillis() < backoffUntil;
     }
 
+    /** Seconds left before requests resume, 0 when not rate limited. */
+    public static long backoffSecondsLeft() {
+        long left = backoffUntil - System.currentTimeMillis();
+        return left <= 0 ? 0 : (left + 999) / 1000;
+    }
+
+    /** "Spotify rate limit: trying again in 3m 20s" while backing off. */
+    public static String backoffMessage() {
+        return "Spotify rate limit: trying again in " + dev.tunewire.core.RateLimit.describe(backoffSecondsLeft());
+    }
+
     public static CompletableFuture<Response> get(String path) {
         return call("GET", path, null);
     }
@@ -84,7 +97,7 @@ public final class SpotifyApi {
     /** Sends a request; completes with any HTTP response (callers check status), or exceptionally on I/O or auth failure. */
     public static CompletableFuture<Response> call(String method, String path, String json) {
         if (backingOff()) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Rate limited by Spotify, retrying shortly"));
+            return CompletableFuture.failedFuture(new IllegalStateException(backoffMessage()));
         }
         // hop off the caller (usually the render thread) first: HttpClient does connection/DNS setup synchronously
         return CompletableFuture.supplyAsync(() -> null, IO)
@@ -111,8 +124,14 @@ public final class SpotifyApi {
         dev.tunewire.Perf.request();
         return HTTP.sendAsync(b.build(), HttpResponse.BodyHandlers.ofString()).thenApply(res -> {
             if (res.statusCode() == 429) {
-                long secs = res.headers().firstValueAsLong("Retry-After").orElse(5);
-                backoffUntil = System.currentTimeMillis() + Math.max(1, Math.min(120, secs)) * 1000;
+                long told = res.headers().firstValueAsLong("Retry-After").orElse(-1);
+                int n = ++consecutive429;
+                long wait = dev.tunewire.core.RateLimit.waitSeconds(told, n);
+                backoffUntil = Math.max(backoffUntil, System.currentTimeMillis() + wait * 1000);
+                dev.tunewire.TunewireClient.LOG.warn("Spotify rate limit (429, Retry-After {}): pausing requests for {}s",
+                        told < 0 ? "absent" : told, wait);
+            } else {
+                consecutive429 = 0;
             }
             return new Response(res.statusCode(), res.body());
         });

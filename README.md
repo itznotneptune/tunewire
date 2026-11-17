@@ -16,7 +16,8 @@ A client-side Fabric mod for Minecraft 1.21.11 that puts your Spotify inside the
   - If the timing is off, switch to another lyric version or nudge the offset.
 - **Player screen**:
   - seek bar, play/pause, next/previous, shuffle, repeat and volume;
-  - a device picker;
+  - a device picker. Tunewire remembers the device you last played on and sends every command to it, so it stays
+    connected after Spotify stops calling it "active" (for example after a long pause);
   - a **Queue** tab listing what plays next;
   - scrolling lyrics;
   - two layouts, switched with the button next to fit-to-screen: **tabs** across the top, or an **app layout** with your library in a sidebar and a playback bar along the bottom;
